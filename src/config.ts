@@ -37,7 +37,7 @@ export function saveConfig(config: ConductorConfig, cwd = process.cwd()): void {
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 	const p = configPath(cwd);
 	const tmp = `${p}.tmp`;
-	writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf8");
+	writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 	renameSync(tmp, p);
 }
 

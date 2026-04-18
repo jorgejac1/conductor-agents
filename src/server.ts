@@ -10,7 +10,9 @@
  *   POST /api/tentacles/:id/retry → retry a worker { workerId }
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { SwarmState } from "evalgate";
 import { swarmEvents } from "evalgate";
 import { getTentacleState, retryTentacleWorker, runTentacle } from "./orchestrator.js";
@@ -28,7 +30,7 @@ export interface ServerHandle {
 	port: number;
 }
 
-export function startServer(opts: ServerOptions = {}): ServerHandle {
+export async function startServer(opts: ServerOptions = {}): Promise<ServerHandle> {
 	const port = opts.port ?? 8080;
 	const cwd = opts.cwd ?? process.cwd();
 
@@ -65,6 +67,19 @@ export function startServer(opts: ServerOptions = {}): ServerHandle {
 			req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
 			req.on("error", reject);
 		});
+	}
+
+	function parseLogsUrl(url: string): { tentacleId: string; workerId: string } | null {
+		// /api/tentacles/:id/logs/:workerId
+		const prefix = "/api/tentacles/";
+		if (!url.startsWith(prefix)) return null;
+		const rest = url.slice(prefix.length);
+		const logsIdx = rest.indexOf("/logs/");
+		if (logsIdx === -1) return null;
+		const tentacleId = rest.slice(0, logsIdx);
+		const workerId = rest.slice(logsIdx + "/logs/".length);
+		if (!tentacleId || !workerId) return null;
+		return { tentacleId, workerId };
 	}
 
 	function tentacleIdFromUrl(url: string, suffix: string): string | null {
@@ -172,6 +187,42 @@ export function startServer(opts: ServerOptions = {}): ServerHandle {
 			return;
 		}
 
+		const logsRoute = parseLogsUrl(url);
+		if (logsRoute && method === "GET") {
+			const { tentacleId, workerId } = logsRoute;
+			getTentacleState(tentacleId, cwd)
+				.then((state) => {
+					if (!state) {
+						res.writeHead(404, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: `No state for tentacle "${tentacleId}"` }));
+						return;
+					}
+					const worker = state.workers.find((w) => w.id.startsWith(workerId));
+					if (!worker) {
+						res.writeHead(404, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: `Worker "${workerId}" not found` }));
+						return;
+					}
+					if (!existsSync(worker.logPath)) {
+						res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+						res.end("(no output yet)");
+						return;
+					}
+					const content = readFileSync(worker.logPath, "utf8");
+					res.writeHead(200, {
+						"Content-Type": "text/plain; charset=utf-8",
+						"Cache-Control": "no-store",
+					});
+					res.end(content);
+				})
+				.catch((err: unknown) => {
+					const message = err instanceof Error ? err.message : String(err);
+					res.writeHead(500, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: message }));
+				});
+			return;
+		}
+
 		const retryId = tentacleIdFromUrl(url, "retry");
 		if (retryId && method === "POST") {
 			readBody(req)
@@ -207,10 +258,11 @@ export function startServer(opts: ServerOptions = {}): ServerHandle {
 	}
 
 	const server = createServer(handleRequest);
-	server.listen(port);
+	await new Promise<void>((resolve) => server.listen(port, resolve));
+	const actualPort = (server.address() as AddressInfo).port;
 
 	return {
-		port,
+		port: actualPort,
 		stop() {
 			swarmEvents.off("state", broadcastSwarm);
 			for (const res of sseClients) {

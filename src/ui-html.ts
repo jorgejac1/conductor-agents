@@ -174,6 +174,28 @@ export function htmlDashboard(): string {
   .worker-card.verifying { border-left: 3px solid var(--purple); }
   .worker-card.merging { border-left: 3px solid var(--accent); }
 
+  .worker-wrap { display: flex; flex-direction: column; }
+
+  .log-panel {
+    background: #0a0e13;
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    padding: 10px 12px;
+    margin-top: -8px;
+    margin-bottom: 8px;
+  }
+
+  .log-content {
+    font-size: 11px;
+    color: var(--muted);
+    max-height: 280px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+
   .badge {
     padding: 2px 7px;
     border-radius: 4px;
@@ -267,6 +289,7 @@ export function htmlDashboard(): string {
   let tentacles = [];
   let selectedId = null;
   const swarmStates = {};
+  const logPollers = {};
 
   // ── SSE ──────────────────────────────────────────────────────────────
   function connect() {
@@ -365,15 +388,21 @@ export function htmlDashboard(): string {
       const retryBtn = w.status === 'failed'
         ? \`<button class="btn" onclick="retryWorker('\${id}', '\${w.id}')">↺ Retry</button>\`
         : '';
+      const logsBtn = \`<button class="btn" onclick="toggleLogs('\${id}', '\${w.id}')">≡ Logs</button>\`;
       const spinner = ['spawning','running','verifying','merging'].includes(w.status)
         ? '<span class="spinner">⟳</span> ' : '';
-      return \`<div class="worker-card \${w.status}">
-        <span class="badge \${w.status}">\${w.status}</span>
-        <div class="worker-info">
-          <div class="worker-title">\${spinner}\${esc(w.contractTitle || w.id)}</div>
-          <div class="worker-meta">id: \${w.id.slice(0, 8)}…</div>
+      return \`<div class="worker-wrap">
+        <div class="worker-card \${w.status}">
+          <span class="badge \${w.status}">\${w.status}</span>
+          <div class="worker-info">
+            <div class="worker-title">\${spinner}\${esc(w.contractTitle || w.id)}</div>
+            <div class="worker-meta">id: \${w.id.slice(0, 8)}…</div>
+          </div>
+          <div class="worker-actions">\${retryBtn}\${logsBtn}</div>
         </div>
-        <div class="worker-actions">\${retryBtn}</div>
+        <div class="log-panel" id="log-\${w.id}" style="display:none">
+          <pre class="log-content" id="logcontent-\${w.id}">Loading…</pre>
+        </div>
       </div>\`;
     }).join('');
 
@@ -383,6 +412,42 @@ export function htmlDashboard(): string {
         \${runBtn}
       </div>
       <div class="workers-grid">\${cards}</div>\`;
+  }
+
+  // ── Log panel ─────────────────────────────────────────────────────────────
+  window.toggleLogs = function(tentacleId, workerId) {
+    const panel = document.getElementById(\`log-\${workerId}\`);
+    if (!panel) return;
+    if (panel.style.display !== 'none') {
+      panel.style.display = 'none';
+      if (logPollers[workerId]) { clearTimeout(logPollers[workerId]); delete logPollers[workerId]; }
+      return;
+    }
+    panel.style.display = 'block';
+    fetchLog(tentacleId, workerId);
+  };
+
+  function fetchLog(tentacleId, workerId) {
+    const el = document.getElementById(\`logcontent-\${workerId}\`);
+    if (!el) return;
+    fetch(\`/api/tentacles/\${tentacleId}/logs/\${workerId}\`)
+      .then(r => r.text())
+      .then(text => {
+        el.textContent = text || '(no output yet)';
+        el.scrollTop = el.scrollHeight;
+      })
+      .catch(() => { el.textContent = '(failed to load log)'; });
+
+    // Poll while worker is active, stop when done/failed
+    const state = swarmStates[tentacleId];
+    const worker = state?.workers?.find(w => w.id === workerId);
+    const isActive = worker && ['spawning','running','verifying','merging'].includes(worker.status);
+    if (isActive) {
+      logPollers[workerId] = setTimeout(() => {
+        const panel = document.getElementById(\`log-\${workerId}\`);
+        if (panel && panel.style.display !== 'none') fetchLog(tentacleId, workerId);
+      }, 2000);
+    }
   }
 
   // ── Actions ──────────────────────────────────────────────────────────

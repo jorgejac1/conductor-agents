@@ -94,14 +94,15 @@ conductor status auth
 
 | Command | Description |
 |---------|-------------|
-| `conductor init` | Create `.conductor/` in the current directory |
+| `conductor init [--yes]` | Create `.conductor/` — `--yes` skips the first-run wizard |
 | `conductor add <name> [opts]` | Add a new tentacle |
 | `conductor rm <name>` | Remove a tentacle |
-| `conductor list` | List all tentacles with progress bars |
+| `conductor list` | List all tentacles with color-coded progress bars |
 | `conductor run <name> [opts]` | Run a tentacle's worker swarm |
 | `conductor run --all` | Run all tentacles sequentially |
 | `conductor retry <worker-id> <tentacle>` | Retry a failed worker |
-| `conductor status [name]` | Show worker states |
+| `conductor logs <worker-id> <tentacle>` | Print a worker's session log |
+| `conductor status [name]` | Show worker states with duration and eval result |
 | `conductor ui [--port=8080]` | Start web dashboard |
 | `conductor help` | Show usage |
 
@@ -118,6 +119,19 @@ conductor status auth
 --concurrency=N        Worker concurrency (default: 3)
 --agent=cmd            Agent command (default: claude)
 --resume               Resume from existing state, skip done workers
+```
+
+### `conductor logs` options
+
+```
+--follow, -f           Tail the log live (polls every 500ms until Ctrl+C)
+```
+
+Worker IDs can be abbreviated — any unique prefix works:
+
+```bash
+conductor logs eb2eadd4 auth
+conductor logs eb2eadd4 auth --follow
 ```
 
 ---
@@ -210,7 +224,7 @@ Edit this file freely. The next `conductor run` will pick it up.
 |---------|---------|--------|
 | v0.1.0 | Core tentacle model, CLI, eval-gated workers, SSE dashboard | Shipped |
 | v0.1.1 | Fix: initial UI state loading, progress bar derived from workers | Shipped |
-| v0.2 | npm publish, interactive init wizard, live log streaming in UI | Planned |
+| v0.2 | Interactive init wizard, live log streaming in UI, color CLI output, `conductor logs` command | Shipped |
 | v0.3 | Daemon mode — workers survive terminal close, state recovery on restart | Planned |
 | v0.4 | Telegram bot gateway — run/retry/status from phone | Planned |
 | v0.5 | `conductor plan "<goal>"` — LLM generates tentacles + tasks automatically | Planned |
