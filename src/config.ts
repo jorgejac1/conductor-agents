@@ -26,7 +26,13 @@ export function loadConfig(cwd = process.cwd()): ConductorConfig | null {
 	const p = configPath(cwd);
 	if (!existsSync(p)) return null;
 	try {
-		return JSON.parse(readFileSync(p, "utf8")) as ConductorConfig;
+		const raw = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
+		// Migrate v0.2 configs that used "tentacles" instead of "tracks"
+		if (!Array.isArray(raw.tracks) && Array.isArray(raw.tentacles)) {
+			raw.tracks = raw.tentacles;
+		}
+		if (!Array.isArray(raw.tracks)) raw.tracks = [];
+		return raw as unknown as ConductorConfig;
 	} catch {
 		return null;
 	}

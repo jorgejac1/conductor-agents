@@ -1,6 +1,6 @@
 {
   "name": "conductor-agents",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Multi-agent orchestrator with eval-gated quality gates. Spawn parallel agent workers per track, verify output before merging.",
   "type": "module",
   "bin": {
@@ -37,7 +37,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "evalgate": "^0.10.1"
+    "evalgate": "^0.10.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",

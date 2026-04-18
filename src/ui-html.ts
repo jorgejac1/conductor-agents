@@ -246,6 +246,22 @@ export function htmlDashboard(): string {
   }
   .dot.connected { background: var(--green); }
 
+  .tg-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    background: transparent;
+  }
+  .tg-pill.configured {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
   .spinner {
     display: inline-block;
     animation: spin 1s linear infinite;
@@ -258,6 +274,7 @@ export function htmlDashboard(): string {
   <h1>conductor</h1>
   <span class="subtitle">multi-agent orchestrator</span>
   <span style="flex:1"></span>
+  <span class="tg-pill" id="tg-pill">📱 telegram</span>
   <span id="conn-status"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting</span></span>
 </header>
 
@@ -492,6 +509,20 @@ export function htmlDashboard(): string {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
+
+  // ── Telegram status ───────────────────────────────────────────────────
+  fetch('/api/telegram-status')
+    .then(r => r.json())
+    .then(data => {
+      const pill = document.getElementById('tg-pill');
+      if (pill && data.configured) {
+        pill.classList.add('configured');
+        pill.title = 'Telegram bot configured — run: conductor telegram';
+      } else if (pill) {
+        pill.title = 'Telegram not configured — run: conductor telegram setup';
+      }
+    })
+    .catch(() => {});
 
   // ── Init ──────────────────────────────────────────────────────────────
   fetch('/api/tracks')

@@ -1,5 +1,10 @@
 import type { SwarmState } from "evalgate";
 
+export interface TelegramBotConfig {
+	token: string;
+	chatId: number;
+}
+
 export interface Track {
 	id: string; // slug: "auth-module"
 	name: string; // display: "Auth Module"
@@ -15,6 +20,7 @@ export interface ConductorConfig {
 		concurrency: number; // 3
 		agentCmd: string; // "claude"
 	};
+	telegram?: TelegramBotConfig;
 }
 
 export interface TrackStatus {

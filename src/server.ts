@@ -15,6 +15,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { SwarmState } from "evalgate";
 import { swarmEvents } from "evalgate";
+import { loadConfig } from "./config.js";
 import { getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
 import { listTracks } from "./track.js";
 import type { TrackStatus } from "./types.js";
@@ -99,6 +100,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		if (url === "/" || url === "/index.html") {
 			res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
 			res.end(htmlDashboard());
+			return;
+		}
+
+		if (url === "/api/telegram-status" && method === "GET") {
+			const config = loadConfig(cwd);
+			const configured = Boolean(config?.telegram?.token);
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+			res.end(JSON.stringify({ configured }));
 			return;
 		}
 
