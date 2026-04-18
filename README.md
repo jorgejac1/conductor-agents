@@ -222,7 +222,7 @@ Edit this file freely. The next `conductor run` will pick it up.
 ## Contributing
 
 ```bash
-git clone https://github.com/jorgejac1/conductor
+git clone https://github.com/jorgejac1/conductor-agents
 cd conductor
 npm install
 npm run build
