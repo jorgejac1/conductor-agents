@@ -35,7 +35,12 @@ export async function retryTentacleWorker(
 	const todoPath = tentacleTodoPath(id, cwd);
 	const agentCmd = opts.agentCmd ?? tentacle.agentCmd ?? "claude";
 
-	await retryWorker(workerId, todoPath, { todoPath, agentCmd });
+	// Resolve prefix to full worker ID
+	const state = await loadState(todoPath);
+	const match = state?.workers.find((w) => w.id.startsWith(workerId));
+	if (!match) throw new Error(`worker not found: ${workerId}`);
+
+	await retryWorker(match.id, todoPath, { todoPath, agentCmd });
 }
 
 export async function getTentacleState(

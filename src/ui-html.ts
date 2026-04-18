@@ -47,8 +47,11 @@ export function htmlDashboard(): string {
     align-items: center;
     gap: 12px;
     padding: 10px 16px;
+    background: var(--bg);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    position: relative;
+    z-index: 10;
   }
 
   header h1 { font-size: 15px; font-weight: 600; }
