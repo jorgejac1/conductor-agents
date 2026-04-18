@@ -23,10 +23,16 @@ export interface ConductorConfig {
 	telegram?: TelegramBotConfig;
 }
 
+export interface TrackCostSummary {
+	totalTokens: number;
+	estimatedUsd: number;
+}
+
 export interface TrackStatus {
 	track: Track;
 	todoTotal: number;
 	todoPending: number;
 	todoDone: number;
 	swarmState: SwarmState | null;
+	cost?: TrackCostSummary;
 }

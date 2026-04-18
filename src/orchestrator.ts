@@ -1,5 +1,14 @@
+import { existsSync, readFileSync } from "node:fs";
 import type { SwarmOptions, SwarmResult, SwarmState } from "evalgate";
-import { loadState, retryWorker, runSwarm, swarmEvents } from "evalgate";
+import {
+	getBudgetSummary,
+	loadState,
+	parseTodo,
+	queryBudgetRecords,
+	retryWorker,
+	runSwarm,
+	swarmEvents,
+} from "evalgate";
 import { trackTodoPath } from "./config.js";
 import { getTrack } from "./track.js";
 
@@ -69,6 +78,20 @@ export async function runAll(
 	}
 
 	return results;
+}
+
+export function getTrackCost(id: string, cwd = process.cwd()): ReturnType<typeof getBudgetSummary> {
+	const todoPath = trackTodoPath(id, cwd);
+	if (!existsSync(todoPath)) return [];
+	const source = readFileSync(todoPath, "utf8");
+	const contracts = parseTodo(source);
+	return getBudgetSummary(todoPath, contracts);
+}
+
+export function getTrackTotalTokens(id: string, cwd = process.cwd()): number {
+	const todoPath = trackTodoPath(id, cwd);
+	const records = queryBudgetRecords(todoPath);
+	return records.reduce((sum, r) => sum + r.tokens, 0);
 }
 
 export { swarmEvents };

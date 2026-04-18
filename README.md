@@ -9,7 +9,7 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v0.5.0](https://img.shields.io/badge/version-v0.5.0-brightgreen.svg)](#roadmap)
+[![v0.6.0](https://img.shields.io/badge/version-v0.6.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -114,6 +114,7 @@ conductor status auth
 | `conductor plan "<goal>"` | Generate tracks + tasks from a natural-language goal |
 | `conductor plan apply [--dry-run]` | Apply the generated plan draft to create tracks |
 | `conductor plan show` | Print the current plan draft |
+| `conductor report [track]` | Show cost report — tokens + estimated USD per track |
 | `conductor telegram setup` | Configure Telegram bot token + chat ID |
 | `conductor telegram [start]` | Start Telegram bot (foreground) |
 | `conductor ui [--port=8080]` | Start web dashboard |
@@ -266,7 +267,7 @@ Edit this file freely. The next `conductor run` will pick it up.
 | v0.3 | Rename: tentacle → track (breaking change, filesystem path updated) | Shipped |
 | v0.4 | Telegram bot gateway — run/retry/status from phone | Shipped |
 | v0.5 | `conductor plan "<goal>"` — LLM generates tracks + tasks automatically | Shipped |
-| v0.6 | Per-worker cost tracking, run history, `conductor report` | Planned |
+| v0.6 | Per-track cost tracking, `conductor report`, `/api/tracks/:id/cost`, SSE cost events | Shipped |
 | v1.0 | Stable API, full docs, Docker image | Planned |
 
 ---

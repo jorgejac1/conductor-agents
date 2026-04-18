@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { loadState } from "evalgate";
+import { loadState, queryBudgetRecords } from "evalgate";
 import {
 	configDir,
 	loadConfig,
@@ -128,7 +128,19 @@ export async function listTracks(cwd = process.cwd()): Promise<TrackStatus[]> {
 			todoDone = prog.done;
 		}
 
-		results.push({ track, todoTotal, todoPending, todoDone, swarmState });
+		const budgetRecords = queryBudgetRecords(todoPath);
+		const totalTokens = budgetRecords.reduce((sum, r) => sum + r.tokens, 0);
+		// Blended Sonnet 4 estimate: $9/MTok (midpoint of $3 input / $15 output)
+		const estimatedUsd = (totalTokens * 9) / 1_000_000;
+
+		results.push({
+			track,
+			todoTotal,
+			todoPending,
+			todoDone,
+			swarmState,
+			...(totalTokens > 0 ? { cost: { totalTokens, estimatedUsd } } : {}),
+		});
 	}
 	return results;
 }

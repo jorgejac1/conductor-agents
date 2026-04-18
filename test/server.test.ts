@@ -166,6 +166,31 @@ describe("server", () => {
 		}
 	});
 
+	it("GET /api/tracks/:id/cost returns budget summary JSON", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Auth", "Auth layer", [], dir);
+			const { reportTokenUsage } = await import("evalgate");
+			const todoPath = trackTodoPath("auth", dir);
+			reportTokenUsage(todoPath, "add-jwt", 5000, undefined, {
+				inputTokens: 3000,
+				outputTokens: 2000,
+			});
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/tracks/auth/cost`);
+			assert.strictEqual(res.status, 200);
+			const data = (await res.json()) as unknown[];
+			// getBudgetSummary returns an array; with no contracts parsed, it returns []
+			// (no todo.md contracts defined), but the endpoint itself must not error
+			assert.ok(Array.isArray(data));
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("GET /nonexistent returns 404", async () => {
 		const dir = tmpDir();
 		let handle: ServerHandle | undefined;

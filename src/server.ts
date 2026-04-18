@@ -16,7 +16,7 @@ import type { AddressInfo } from "node:net";
 import type { SwarmState } from "evalgate";
 import { swarmEvents } from "evalgate";
 import { loadConfig } from "./config.js";
-import { getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
+import { getTrackCost, getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
 import { listTracks } from "./track.js";
 import type { TrackStatus } from "./types.js";
 import { htmlDashboard } from "./ui-html.js";
@@ -60,6 +60,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 	}
 
 	swarmEvents.on("state", broadcastSwarm);
+
+	// Forward structured cost events (v0.12) to SSE clients
+	function broadcastCost(evt: unknown): void {
+		const data = `data: ${JSON.stringify({ type: "cost", ...(evt as object) })}\n\n`;
+		for (const res of sseClients) {
+			try {
+				res.write(data);
+			} catch {
+				sseClients.delete(res);
+			}
+		}
+	}
+	swarmEvents.on("cost", broadcastCost);
 
 	function readBody(req: IncomingMessage): Promise<string> {
 		return new Promise((resolve, reject) => {
@@ -135,6 +148,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 					res.writeHead(500, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ error: String(err) }));
 				});
+			return;
+		}
+
+		const costId = trackIdFromUrl(url, "cost");
+		if (costId && method === "GET") {
+			try {
+				const summary = getTrackCost(costId, cwd);
+				res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+				res.end(JSON.stringify(summary));
+			} catch (err: unknown) {
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: String(err) }));
+			}
 			return;
 		}
 
@@ -274,6 +300,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		port: actualPort,
 		stop() {
 			swarmEvents.off("state", broadcastSwarm);
+			swarmEvents.off("cost", broadcastCost);
 			for (const res of sseClients) {
 				try {
 					res.end();

@@ -104,6 +104,39 @@ describe("track", () => {
 		}
 	});
 
+	it("listTracks includes cost data after budget records are written", async () => {
+		const dir = tmpDir();
+		try {
+			initConductor(dir);
+			createTrack("Payments", "Payment layer", [], dir);
+			const { reportTokenUsage } = await import("evalgate");
+			const { trackTodoPath } = await import("../src/config.js");
+			const todoPath = trackTodoPath("payments", dir);
+			reportTokenUsage(todoPath, "contract-a", 10_000);
+			reportTokenUsage(todoPath, "contract-a", 5_000);
+			const statuses = await listTracks(dir);
+			const payments = statuses.find((s) => s.track.id === "payments");
+			assert.ok(payments?.cost, "cost should be present after budget records written");
+			assert.strictEqual(payments?.cost?.totalTokens, 15_000);
+			assert.ok((payments?.cost?.estimatedUsd ?? 0) > 0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("listTracks has no cost field when no budget records exist", async () => {
+		const dir = tmpDir();
+		try {
+			initConductor(dir);
+			createTrack("Clean Track", "No runs yet", [], dir);
+			const statuses = await listTracks(dir);
+			const track = statuses.find((s) => s.track.id === "clean-track");
+			assert.strictEqual(track?.cost, undefined);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("CONTEXT.md contains name, description, and files", () => {
 		const dir = tmpDir();
 		try {
