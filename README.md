@@ -58,13 +58,13 @@ the `eval:` verifier exits 0.
 ## Install
 
 ```bash
-npm install -g conductor
+npm install -g conductor-agents
 ```
 
 Or run directly:
 
 ```bash
-npx conductor help
+npx conductor-agents help
 ```
 
 ## Quick start
