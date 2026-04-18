@@ -1,0 +1,48 @@
+{
+  "name": "conductor",
+  "version": "0.1.0",
+  "description": "Multi-agent orchestrator with eval-gated quality gates. Spawn parallel agent workers per tentacle, verify output before merging.",
+  "type": "module",
+  "bin": {
+    "conductor": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "test": "node --test --import tsx test/*.test.ts",
+    "prepare": "npm run build",
+    "lint": "biome check src/ test/",
+    "lint:fix": "biome check --write src/ test/",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "multi-agent",
+    "orchestrator",
+    "evalgate",
+    "claude-code",
+    "ai-agents",
+    "worktree",
+    "tentacle"
+  ],
+  "author": "Jorge Jacome",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "evalgate": "file:../greenlight"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.12",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
