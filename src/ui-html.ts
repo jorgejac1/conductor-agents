@@ -267,6 +267,23 @@ export function htmlDashboard(): string {
     animation: spin 1s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error-bar {
+    display: none;
+    position: fixed;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(248,81,73,0.15);
+    border: 1px solid var(--red);
+    color: var(--red);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    max-width: 600px;
+    text-align: center;
+    z-index: 100;
+  }
 </style>
 </head>
 <body>
@@ -294,6 +311,8 @@ export function htmlDashboard(): string {
     </div>
   </main>
 </div>
+
+<div class="error-bar" id="error-bar"></div>
 
 <div class="status-bar">
   <span>Workers: <b id="stat-total">0</b></span>
@@ -351,7 +370,7 @@ export function htmlDashboard(): string {
           document.getElementById('last-update').textContent =
             'updated ' + new Date().toLocaleTimeString();
         }
-      } catch {}
+      } catch { /* ignore malformed SSE frames */ }
     };
   }
 
@@ -471,9 +490,20 @@ export function htmlDashboard(): string {
   }
 
   // ── Actions ──────────────────────────────────────────────────────────
+  function showError(msg) {
+    const bar = document.getElementById('error-bar');
+    if (!bar) return;
+    bar.textContent = msg;
+    bar.style.display = 'block';
+    setTimeout(() => { bar.style.display = 'none'; }, 6000);
+  }
+
   window.runTrack = function(id) {
     fetch(\`/api/tracks/\${id}/run\`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-      .catch(err => console.error('run failed', err));
+      .then(r => {
+        if (!r.ok) return r.json().then(d => { showError(d.error ?? \`Run failed (\${r.status})\`); });
+      })
+      .catch(err => { showError(err instanceof Error ? err.message : String(err)); });
   };
 
   window.retryWorker = function(trackId, workerId) {
@@ -481,7 +511,9 @@ export function htmlDashboard(): string {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workerId })
-    }).catch(err => console.error('retry failed', err));
+    })
+      .then(r => { if (!r.ok) return r.json().then(d => showError(d.error ?? \`Retry failed (\${r.status})\`)); })
+      .catch(err => showError(err instanceof Error ? err.message : String(err)));
   };
 
   // ── Stats bar ─────────────────────────────────────────────────────────

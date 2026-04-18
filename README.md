@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="static/images/conductor-header.png" alt="conductor" width="100%" />
+</p>
+
 # conductor
 
 > **Multi-agent orchestrator with eval-gated quality gates.**
@@ -5,7 +9,7 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v0.3.0](https://img.shields.io/badge/version-v0.3.0-brightgreen.svg)](#roadmap)
+[![v0.5.0](https://img.shields.io/badge/version-v0.5.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -75,16 +79,20 @@ cd your-project
 git init  # must be a git repo
 conductor init
 
-# 2. Add a track
+# Option A — generate a plan from a goal (v0.5+)
+conductor plan "add JWT authentication with middleware and login endpoint"
+# Review .conductor/plan-draft.md, then:
+conductor plan apply
+
+# Option B — add tracks manually
 conductor add auth --desc="Authentication layer" --files="src/auth/**"
+# Edit .conductor/tracks/auth/todo.md with your tasks
 
-# 3. Edit the generated todo.md with your tasks
-vim .conductor/tracks/auth/todo.md
+# 2. Run
+conductor run auth         # single track
+conductor run --all        # all tracks in parallel
 
-# 4. Run
-conductor run auth
-
-# 5. Check results
+# 3. Check results
 conductor status auth
 ```
 
@@ -103,6 +111,11 @@ conductor status auth
 | `conductor retry <worker-id> <track>` | Retry a failed worker |
 | `conductor logs <worker-id> <track>` | Print a worker's session log |
 | `conductor status [name]` | Show worker states with duration and eval result |
+| `conductor plan "<goal>"` | Generate tracks + tasks from a natural-language goal |
+| `conductor plan apply [--dry-run]` | Apply the generated plan draft to create tracks |
+| `conductor plan show` | Print the current plan draft |
+| `conductor telegram setup` | Configure Telegram bot token + chat ID |
+| `conductor telegram [start]` | Start Telegram bot (foreground) |
 | `conductor ui [--port=8080]` | Start web dashboard |
 | `conductor help` | Show usage |
 
@@ -159,6 +172,31 @@ Composite verifiers are supported:
 - [ ] README is clear
   - eval.llm: Does README.md explain the auth flow in plain English?
 ```
+
+---
+
+## AI planning (`conductor plan`)
+
+`conductor plan` uses an LLM agent to turn a natural-language goal into a
+ready-to-run multi-track plan. The agent explores your codebase, designs
+track ownership, and writes `eval:`-gated tasks for each track.
+
+```bash
+# Generate a plan (agent explores your codebase, writes .conductor/plan-draft.md)
+conductor plan "add JWT auth with middleware, login endpoint, and rate limiting"
+
+# Preview what would be created without applying
+conductor plan apply --dry-run
+
+# Apply — creates tracks with CONTEXT.md and todo.md
+conductor plan apply
+
+# Run everything
+conductor run --all
+```
+
+The generated `todo.md` files are ready for `conductor run` — each task has a
+verifier that evalgate will run after the agent completes its work.
 
 ---
 
@@ -225,9 +263,9 @@ Edit this file freely. The next `conductor run` will pick it up.
 | v0.1.0 | Core track model, CLI, eval-gated workers, SSE dashboard | Shipped |
 | v0.1.1 | Fix: initial UI state loading, progress bar derived from workers | Shipped |
 | v0.2 | Interactive init wizard, live log streaming in UI, color CLI output, `conductor logs` command | Shipped |
-| v0.3 | Rename: tentacle → track (breaking change, filesystem path updated) | In progress |
-| v0.4 | Telegram bot gateway — run/retry/status from phone | Planned |
-| v0.5 | `conductor plan "<goal>"` — LLM generates tracks + tasks automatically | Planned |
+| v0.3 | Rename: tentacle → track (breaking change, filesystem path updated) | Shipped |
+| v0.4 | Telegram bot gateway — run/retry/status from phone | Shipped |
+| v0.5 | `conductor plan "<goal>"` — LLM generates tracks + tasks automatically | Shipped |
 | v0.6 | Per-worker cost tracking, run history, `conductor report` | Planned |
 | v1.0 | Stable API, full docs, Docker image | Planned |
 
