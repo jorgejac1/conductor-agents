@@ -1,39 +1,39 @@
 import type { SwarmOptions, SwarmResult, SwarmState } from "evalgate";
 import { loadState, retryWorker, runSwarm, swarmEvents } from "evalgate";
-import { tentacleTodoPath } from "./config.js";
-import { getTentacle } from "./tentacle.js";
+import { trackTodoPath } from "./config.js";
+import { getTrack } from "./track.js";
 
-export interface RunTentacleOpts {
+export interface RunTrackOpts {
 	concurrency?: number;
 	agentCmd?: string;
 	resume?: boolean;
 	cwd?: string;
 }
 
-export async function runTentacle(id: string, opts: RunTentacleOpts = {}): Promise<SwarmResult> {
+export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<SwarmResult> {
 	const cwd = opts.cwd ?? process.cwd();
-	const tentacle = getTentacle(id, cwd);
+	const track = getTrack(id, cwd);
 
-	const todoPath = tentacleTodoPath(id, cwd);
+	const todoPath = trackTodoPath(id, cwd);
 	const swarmOpts: SwarmOptions = {
 		todoPath,
-		concurrency: opts.concurrency ?? tentacle.concurrency ?? 3,
-		agentCmd: opts.agentCmd ?? tentacle.agentCmd ?? "claude",
+		concurrency: opts.concurrency ?? track.concurrency ?? 3,
+		agentCmd: opts.agentCmd ?? track.agentCmd ?? "claude",
 		resume: opts.resume ?? false,
 	};
 
 	return runSwarm(swarmOpts);
 }
 
-export async function retryTentacleWorker(
+export async function retryTrackWorker(
 	id: string,
 	workerId: string,
 	opts: { agentCmd?: string; cwd?: string } = {},
 ): Promise<void> {
 	const cwd = opts.cwd ?? process.cwd();
-	const tentacle = getTentacle(id, cwd);
-	const todoPath = tentacleTodoPath(id, cwd);
-	const agentCmd = opts.agentCmd ?? tentacle.agentCmd ?? "claude";
+	const track = getTrack(id, cwd);
+	const todoPath = trackTodoPath(id, cwd);
+	const agentCmd = opts.agentCmd ?? track.agentCmd ?? "claude";
 
 	// Resolve prefix to full worker ID
 	const state = await loadState(todoPath);
@@ -43,11 +43,8 @@ export async function retryTentacleWorker(
 	await retryWorker(match.id, todoPath, { todoPath, agentCmd });
 }
 
-export async function getTentacleState(
-	id: string,
-	cwd = process.cwd(),
-): Promise<SwarmState | null> {
-	const todoPath = tentacleTodoPath(id, cwd);
+export async function getTrackState(id: string, cwd = process.cwd()): Promise<SwarmState | null> {
+	const todoPath = trackTodoPath(id, cwd);
 	try {
 		return await loadState(todoPath);
 	} catch {
@@ -56,18 +53,18 @@ export async function getTentacleState(
 }
 
 export async function runAll(
-	opts: RunTentacleOpts & { tentacleIds?: string[] } = {},
+	opts: RunTrackOpts & { trackIds?: string[] } = {},
 ): Promise<Map<string, SwarmResult>> {
 	const cwd = opts.cwd ?? process.cwd();
 	const { loadConfig } = await import("./config.js");
 	const config = loadConfig(cwd);
 	if (!config) throw new Error("No conductor config found. Run `conductor init` first.");
 
-	const ids = opts.tentacleIds ?? config.tentacles.map((t) => t.id);
+	const ids = opts.trackIds ?? config.tracks.map((t) => t.id);
 	const results = new Map<string, SwarmResult>();
 
 	for (const id of ids) {
-		const result = await runTentacle(id, opts);
+		const result = await runTrack(id, opts);
 		results.set(id, result);
 	}
 

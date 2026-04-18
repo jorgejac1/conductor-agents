@@ -2,9 +2,9 @@
  * conductor dashboard — single-file HTML/CSS/JS, no build step.
  *
  * Layout:
- *   Left sidebar: tentacle list with progress bars
- *   Main area: selected tentacle's workers with status badges + retry buttons
- *   Bottom bar: totals across all tentacles
+ *   Left sidebar: track list with progress bars
+ *   Main area: selected track's workers with status badges + retry buttons
+ *   Bottom bar: totals across all tracks
  */
 
 export function htmlDashboard(): string {
@@ -80,21 +80,21 @@ export function htmlDashboard(): string {
     color: var(--muted);
   }
 
-  .tentacle-item {
+  .track-item {
     padding: 8px 14px;
     cursor: pointer;
     border-left: 3px solid transparent;
     transition: background 0.1s;
   }
 
-  .tentacle-item:hover { background: var(--surface); }
-  .tentacle-item.active {
+  .track-item:hover { background: var(--surface); }
+  .track-item.active {
     border-left-color: var(--accent);
     background: var(--surface);
   }
 
-  .tentacle-name { font-weight: 600; margin-bottom: 3px; }
-  .tentacle-desc { color: var(--muted); font-size: 11px; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-name { font-weight: 600; margin-bottom: 3px; }
+  .track-desc { color: var(--muted); font-size: 11px; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .progress-bar {
     height: 4px;
@@ -130,14 +130,14 @@ export function htmlDashboard(): string {
 
   .empty-state .big { font-size: 32px; }
 
-  .tentacle-header {
+  .track-header {
     display: flex;
     align-items: center;
     gap: 10px;
     margin-bottom: 16px;
   }
 
-  .tentacle-header h2 { font-size: 16px; }
+  .track-header h2 { font-size: 16px; }
 
   .btn {
     padding: 4px 10px;
@@ -263,15 +263,15 @@ export function htmlDashboard(): string {
 
 <div class="main">
   <aside class="sidebar">
-    <div class="sidebar-title">Tentacles</div>
-    <div id="tentacle-list"></div>
+    <div class="sidebar-title">TRACKS</div>
+    <div id="track-list"></div>
   </aside>
 
   <main class="content">
     <div id="main-content">
       <div class="empty-state">
         <div class="big">🎼</div>
-        <div>Select a tentacle to see workers</div>
+        <div>Select a track to see workers</div>
         <div style="color:var(--muted); font-size:12px">or run <code>conductor add &lt;name&gt;</code> to create one</div>
       </div>
     </div>
@@ -289,7 +289,7 @@ export function htmlDashboard(): string {
 
 <script>
 (function() {
-  let tentacles = [];
+  let tracks = [];
   let selectedId = null;
   const swarmStates = {};
   const logPollers = {};
@@ -311,10 +311,10 @@ export function htmlDashboard(): string {
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
-        if (msg.type === 'tentacles') {
-          tentacles = msg.tentacles;
-          for (const ts of tentacles) {
-            if (ts.swarmState) swarmStates[ts.tentacle.id] = ts.swarmState;
+        if (msg.type === 'tracks') {
+          tracks = msg.tracks;
+          for (const ts of tracks) {
+            if (ts.swarmState) swarmStates[ts.track.id] = ts.swarmState;
           }
           renderSidebar();
           updateStats();
@@ -322,11 +322,11 @@ export function htmlDashboard(): string {
         } else if (msg.type === 'swarm') {
           const state = msg.state;
           if (state && state.todoPath) {
-            // Map by todoPath — extract tentacle id from path
+            // Map by todoPath — extract track id from path
             const parts = state.todoPath.split('/');
-            const tentaclesIdx = parts.lastIndexOf('tentacles');
-            if (tentaclesIdx !== -1 && parts[tentaclesIdx + 1]) {
-              swarmStates[parts[tentaclesIdx + 1]] = state;
+            const tracksIdx = parts.lastIndexOf('tracks');
+            if (tracksIdx !== -1 && parts[tracksIdx + 1]) {
+              swarmStates[parts[tracksIdx + 1]] = state;
             }
           }
           if (selectedId) renderMain(selectedId);
@@ -340,17 +340,17 @@ export function htmlDashboard(): string {
 
   // ── Sidebar ──────────────────────────────────────────────────────────
   function renderSidebar() {
-    const list = document.getElementById('tentacle-list');
-    if (!tentacles.length) {
-      list.innerHTML = '<div style="padding:10px 14px;color:var(--muted);font-size:12px">No tentacles yet</div>';
+    const list = document.getElementById('track-list');
+    if (!tracks.length) {
+      list.innerHTML = '<div style="padding:10px 14px;color:var(--muted);font-size:12px">No tracks yet</div>';
       return;
     }
-    list.innerHTML = tentacles.map(ts => {
+    list.innerHTML = tracks.map(ts => {
       const pct = ts.todoTotal > 0 ? Math.round(ts.todoDone / ts.todoTotal * 100) : 0;
-      const active = ts.tentacle.id === selectedId ? ' active' : '';
-      return \`<div class="tentacle-item\${active}" onclick="selectTentacle('\${ts.tentacle.id}')">
-        <div class="tentacle-name">\${esc(ts.tentacle.name)}</div>
-        <div class="tentacle-desc">\${esc(ts.tentacle.description)}</div>
+      const active = ts.track.id === selectedId ? ' active' : '';
+      return \`<div class="track-item\${active}" onclick="selectTrack('\${ts.track.id}')">
+        <div class="track-name">\${esc(ts.track.name)}</div>
+        <div class="track-desc">\${esc(ts.track.description)}</div>
         <div class="progress-bar"><div class="progress-fill" style="width:\${pct}%"></div></div>
         <div class="progress-label">\${ts.todoDone}/\${ts.todoTotal} tasks done</div>
       </div>\`;
@@ -358,26 +358,26 @@ export function htmlDashboard(): string {
   }
 
   // ── Main content ─────────────────────────────────────────────────────
-  window.selectTentacle = function(id) {
+  window.selectTrack = function(id) {
     selectedId = id;
     renderSidebar();
     renderMain(id);
   };
 
   function renderMain(id) {
-    const ts = tentacles.find(t => t.tentacle.id === id);
+    const ts = tracks.find(t => t.track.id === id);
     if (!ts) return;
 
     const state = swarmStates[id] || null;
     const workers = state ? state.workers : [];
 
     const main = document.getElementById('main-content');
-    const runBtn = \`<button class="btn primary" onclick="runTentacle('\${id}')">▶ Run</button>\`;
+    const runBtn = \`<button class="btn primary" onclick="runTrack('\${id}')">▶ Run</button>\`;
 
     if (!workers.length) {
       main.innerHTML = \`
-        <div class="tentacle-header">
-          <h2>\${esc(ts.tentacle.name)}</h2>
+        <div class="track-header">
+          <h2>\${esc(ts.track.name)}</h2>
           \${runBtn}
         </div>
         <div class="empty-state" style="height:auto;margin-top:40px">
@@ -410,15 +410,15 @@ export function htmlDashboard(): string {
     }).join('');
 
     main.innerHTML = \`
-      <div class="tentacle-header">
-        <h2>\${esc(ts.tentacle.name)}</h2>
+      <div class="track-header">
+        <h2>\${esc(ts.track.name)}</h2>
         \${runBtn}
       </div>
       <div class="workers-grid">\${cards}</div>\`;
   }
 
   // ── Log panel ─────────────────────────────────────────────────────────────
-  window.toggleLogs = function(tentacleId, workerId) {
+  window.toggleLogs = function(trackId, workerId) {
     const panel = document.getElementById(\`log-\${workerId}\`);
     if (!panel) return;
     if (panel.style.display !== 'none') {
@@ -427,13 +427,13 @@ export function htmlDashboard(): string {
       return;
     }
     panel.style.display = 'block';
-    fetchLog(tentacleId, workerId);
+    fetchLog(trackId, workerId);
   };
 
-  function fetchLog(tentacleId, workerId) {
+  function fetchLog(trackId, workerId) {
     const el = document.getElementById(\`logcontent-\${workerId}\`);
     if (!el) return;
-    fetch(\`/api/tentacles/\${tentacleId}/logs/\${workerId}\`)
+    fetch(\`/api/tracks/\${trackId}/logs/\${workerId}\`)
       .then(r => r.text())
       .then(text => {
         el.textContent = text || '(no output yet)';
@@ -442,25 +442,25 @@ export function htmlDashboard(): string {
       .catch(() => { el.textContent = '(failed to load log)'; });
 
     // Poll while worker is active, stop when done/failed
-    const state = swarmStates[tentacleId];
+    const state = swarmStates[trackId];
     const worker = state?.workers?.find(w => w.id === workerId);
     const isActive = worker && ['spawning','running','verifying','merging'].includes(worker.status);
     if (isActive) {
       logPollers[workerId] = setTimeout(() => {
         const panel = document.getElementById(\`log-\${workerId}\`);
-        if (panel && panel.style.display !== 'none') fetchLog(tentacleId, workerId);
+        if (panel && panel.style.display !== 'none') fetchLog(trackId, workerId);
       }, 2000);
     }
   }
 
   // ── Actions ──────────────────────────────────────────────────────────
-  window.runTentacle = function(id) {
-    fetch(\`/api/tentacles/\${id}/run\`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+  window.runTrack = function(id) {
+    fetch(\`/api/tracks/\${id}/run\`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       .catch(err => console.error('run failed', err));
   };
 
-  window.retryWorker = function(tentacleId, workerId) {
-    fetch(\`/api/tentacles/\${tentacleId}/retry\`, {
+  window.retryWorker = function(trackId, workerId) {
+    fetch(\`/api/tracks/\${trackId}/retry\`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workerId })
@@ -494,12 +494,12 @@ export function htmlDashboard(): string {
   }
 
   // ── Init ──────────────────────────────────────────────────────────────
-  fetch('/api/tentacles')
+  fetch('/api/tracks')
     .then(r => r.json())
     .then(data => {
-      tentacles = data;
-      for (const ts of tentacles) {
-        if (ts.swarmState) swarmStates[ts.tentacle.id] = ts.swarmState;
+      tracks = data;
+      for (const ts of tracks) {
+        if (ts.swarmState) swarmStates[ts.track.id] = ts.swarmState;
       }
       renderSidebar();
       updateStats();

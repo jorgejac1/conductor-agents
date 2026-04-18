@@ -10,16 +10,16 @@ export function configPath(cwd = process.cwd()): string {
 	return join(configDir(cwd), "config.json");
 }
 
-export function tentacleDir(id: string, cwd = process.cwd()): string {
-	return join(configDir(cwd), "tentacles", id);
+export function trackDir(id: string, cwd = process.cwd()): string {
+	return join(configDir(cwd), "tracks", id);
 }
 
-export function tentacleTodoPath(id: string, cwd = process.cwd()): string {
-	return join(tentacleDir(id, cwd), "todo.md");
+export function trackTodoPath(id: string, cwd = process.cwd()): string {
+	return join(trackDir(id, cwd), "todo.md");
 }
 
-export function tentacleContextPath(id: string, cwd = process.cwd()): string {
-	return join(tentacleDir(id, cwd), "CONTEXT.md");
+export function trackContextPath(id: string, cwd = process.cwd()): string {
+	return join(trackDir(id, cwd), "CONTEXT.md");
 }
 
 export function loadConfig(cwd = process.cwd()): ConductorConfig | null {
@@ -43,7 +43,7 @@ export function saveConfig(config: ConductorConfig, cwd = process.cwd()): void {
 
 export function defaultConfig(): ConductorConfig {
 	return {
-		tentacles: [],
+		tracks: [],
 		defaults: {
 			concurrency: 3,
 			agentCmd: "claude",

@@ -1,24 +1,24 @@
 import type { SwarmState } from "evalgate";
 
-export interface Tentacle {
+export interface Track {
 	id: string; // slug: "auth-module"
 	name: string; // display: "Auth Module"
-	description: string; // what this tentacle owns
+	description: string; // what this track owns
 	files: string[]; // glob patterns for owned files
 	agentCmd?: string; // override default agent
 	concurrency?: number; // override default concurrency
 }
 
 export interface ConductorConfig {
-	tentacles: Tentacle[];
+	tracks: Track[];
 	defaults: {
 		concurrency: number; // 3
 		agentCmd: string; // "claude"
 	};
 }
 
-export interface TentacleStatus {
-	tentacle: Tentacle;
+export interface TrackStatus {
+	track: Track;
 	todoTotal: number;
 	todoPending: number;
 	todoDone: number;

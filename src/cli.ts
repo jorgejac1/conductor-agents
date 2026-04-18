@@ -8,8 +8,8 @@
  * conductor list
  * conductor run <name> [--concurrency=N] [--resume] [--agent=cmd]
  * conductor run --all
- * conductor retry <worker-id> <tentacle>
- * conductor logs <worker-id> <tentacle> [--follow|-f]
+ * conductor retry <worker-id> <track>
+ * conductor logs <worker-id> <track> [--follow|-f]
  * conductor status [name]
  * conductor ui [--port=8080]
  * conductor help
@@ -18,20 +18,14 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import {
-	getTentacleState,
-	type RunTentacleOpts,
-	retryTentacleWorker,
+	getTrackState,
+	type RunTrackOpts,
+	retryTrackWorker,
 	runAll,
-	runTentacle,
+	runTrack,
 } from "./orchestrator.js";
 import { startServer } from "./server.js";
-import {
-	createTentacle,
-	deleteTentacle,
-	getTentacle,
-	initConductor,
-	listTentacles,
-} from "./tentacle.js";
+import { createTrack, deleteTrack, getTrack, initConductor, listTracks } from "./track.js";
 
 // ── ANSI colors (disabled when stdout is not a TTY) ──────────────────────────
 const TTY = process.stdout.isTTY === true;
@@ -95,7 +89,7 @@ async function runInitWizard(): Promise<void> {
 		new Promise((resolve) => rl.question(q, (a) => resolve(a.trim())));
 
 	try {
-		const addFirst = await ask("\nAdd your first tentacle? (y/N): ");
+		const addFirst = await ask("\nAdd your first track? (y/N): ");
 		if (addFirst.toLowerCase() !== "y") return;
 
 		const name = await ask("  Name: ");
@@ -110,11 +104,9 @@ async function runInitWizard(): Promise<void> {
 					.filter(Boolean)
 			: [];
 
-		const tentacle = createTentacle(name, desc, files);
-		console.log(`\n${c.green}✓${c.reset} Created tentacle "${c.bold}${tentacle.id}${c.reset}"`);
-		console.log(
-			`  Edit ${c.cyan}.conductor/tentacles/${tentacle.id}/todo.md${c.reset} to add tasks`,
-		);
+		const track = createTrack(name, desc, files);
+		console.log(`\n${c.green}✓${c.reset} Created track "${c.bold}${track.id}${c.reset}"`);
+		console.log(`  Edit ${c.cyan}.conductor/tracks/${track.id}/todo.md${c.reset} to add tasks`);
 	} finally {
 		rl.close();
 	}
@@ -152,10 +144,10 @@ async function cmdAdd(args: string[]): Promise<number> {
 	const files = filesFlag ? filesFlag.split(",").map((f) => f.trim()) : [];
 
 	try {
-		const tentacle = createTentacle(name, description, files);
-		console.log(`${c.green}✓${c.reset} Created tentacle "${c.bold}${tentacle.id}${c.reset}"`);
-		console.log(`  CONTEXT.md → ${c.cyan}.conductor/tentacles/${tentacle.id}/CONTEXT.md${c.reset}`);
-		console.log(`  todo.md    → ${c.cyan}.conductor/tentacles/${tentacle.id}/todo.md${c.reset}`);
+		const track = createTrack(name, description, files);
+		console.log(`${c.green}✓${c.reset} Created track "${c.bold}${track.id}${c.reset}"`);
+		console.log(`  CONTEXT.md → ${c.cyan}.conductor/tracks/${track.id}/CONTEXT.md${c.reset}`);
+		console.log(`  todo.md    → ${c.cyan}.conductor/tracks/${track.id}/todo.md${c.reset}`);
 		return 0;
 	} catch (err) {
 		console.error(err instanceof Error ? err.message : String(err));
@@ -173,8 +165,8 @@ async function cmdRm(args: string[]): Promise<number> {
 	}
 
 	try {
-		deleteTentacle(id);
-		console.log(`${c.green}✓${c.reset} Deleted tentacle "${id}"`);
+		deleteTrack(id);
+		console.log(`${c.green}✓${c.reset} Deleted track "${id}"`);
 		return 0;
 	} catch (err) {
 		console.error(err instanceof Error ? err.message : String(err));
@@ -184,9 +176,9 @@ async function cmdRm(args: string[]): Promise<number> {
 
 async function cmdList(): Promise<number> {
 	try {
-		const statuses = await listTentacles();
+		const statuses = await listTracks();
 		if (!statuses.length) {
-			console.log(`No tentacles. Run ${c.cyan}conductor add <name>${c.reset} to create one.`);
+			console.log(`No tracks. Run ${c.cyan}conductor add <name>${c.reset} to create one.`);
 			return 0;
 		}
 
@@ -214,10 +206,10 @@ async function cmdList(): Promise<number> {
 			const workerSummary = parts.length ? `  ${parts.join("  ")}` : "";
 
 			console.log(
-				`${c.bold}${ts.tentacle.id.padEnd(20)}${c.reset} ${bar} ${ts.todoDone}/${ts.todoTotal}${workerSummary}`,
+				`${c.bold}${ts.track.id.padEnd(20)}${c.reset} ${bar} ${ts.todoDone}/${ts.todoTotal}${workerSummary}`,
 			);
-			if (ts.tentacle.description) {
-				console.log(`${"".padEnd(22)}${c.gray}${ts.tentacle.description}${c.reset}`);
+			if (ts.track.description) {
+				console.log(`${"".padEnd(22)}${c.gray}${ts.track.description}${c.reset}`);
 			}
 		}
 		return 0;
@@ -237,8 +229,8 @@ async function cmdRun(args: string[]): Promise<number> {
 
 	if (flags.all) {
 		try {
-			console.log("Running all tentacles…");
-			const runOpts: RunTentacleOpts = { resume };
+			console.log("Running all tracks…");
+			const runOpts: RunTrackOpts = { resume };
 			if (concurrency !== undefined) runOpts.concurrency = concurrency;
 			if (agentCmd !== undefined) runOpts.agentCmd = agentCmd;
 			const results = await runAll(runOpts);
@@ -267,11 +259,11 @@ async function cmdRun(args: string[]): Promise<number> {
 	}
 
 	try {
-		console.log(`Running tentacle "${c.bold}${id}${c.reset}"…`);
-		const runOpts: RunTentacleOpts = { resume };
+		console.log(`Running track "${c.bold}${id}${c.reset}"…`);
+		const runOpts: RunTrackOpts = { resume };
 		if (concurrency !== undefined) runOpts.concurrency = concurrency;
 		if (agentCmd !== undefined) runOpts.agentCmd = agentCmd;
-		const result = await runTentacle(id, { ...runOpts, cwd: process.cwd() });
+		const result = await runTrack(id, { ...runOpts, cwd: process.cwd() });
 		const done = result.state.workers.filter((w) => w.status === "done").length;
 		const failed = result.state.workers.filter((w) => w.status === "failed").length;
 		const doneStr = done > 0 ? `${c.green}${done}${c.reset}` : String(done);
@@ -288,20 +280,20 @@ async function cmdRetry(args: string[]): Promise<number> {
 	const flags = parseFlags(args);
 	const positional = positionalArgs(args);
 	const workerId = positional[0];
-	const tentacleId = positional[1];
+	const trackId = positional[1];
 
-	if (!workerId || !tentacleId) {
-		console.error("Usage: conductor retry <worker-id> <tentacle>");
+	if (!workerId || !trackId) {
+		console.error("Usage: conductor retry <worker-id> <track>");
 		return 1;
 	}
 
 	const agentCmd = typeof flags.agent === "string" ? flags.agent : undefined;
 
 	try {
-		console.log(`Retrying worker ${c.bold}${workerId}${c.reset} in tentacle "${tentacleId}"…`);
+		console.log(`Retrying worker ${c.bold}${workerId}${c.reset} in track "${trackId}"…`);
 		const retryOpts: { agentCmd?: string } = {};
 		if (agentCmd !== undefined) retryOpts.agentCmd = agentCmd;
-		await retryTentacleWorker(tentacleId, workerId, retryOpts);
+		await retryTrackWorker(trackId, workerId, retryOpts);
 		console.log(`${c.green}✓${c.reset} Retry complete`);
 		return 0;
 	} catch (err) {
@@ -314,25 +306,25 @@ async function cmdLogs(args: string[]): Promise<number> {
 	const flags = parseFlags(args);
 	const positional = positionalArgs(args);
 	const workerId = positional[0];
-	const tentacleId = positional[1];
+	const trackId = positional[1];
 
-	if (!workerId || !tentacleId) {
-		console.error("Usage: conductor logs <worker-id> <tentacle> [--follow|-f]");
+	if (!workerId || !trackId) {
+		console.error("Usage: conductor logs <worker-id> <track> [--follow|-f]");
 		return 1;
 	}
 
 	const follow = flags.follow === true || flags.f === true;
 
 	try {
-		const state = await getTentacleState(tentacleId);
+		const state = await getTrackState(trackId);
 		if (!state) {
-			console.error(`No run state for "${tentacleId}" — run \`conductor run ${tentacleId}\` first`);
+			console.error(`No run state for "${trackId}" — run \`conductor run ${trackId}\` first`);
 			return 1;
 		}
 
 		const worker = state.workers.find((w) => w.id.startsWith(workerId));
 		if (!worker) {
-			console.error(`Worker "${workerId}" not found in tentacle "${tentacleId}"`);
+			console.error(`Worker "${workerId}" not found in track "${trackId}"`);
 			return 1;
 		}
 
@@ -401,14 +393,14 @@ async function cmdStatus(args: string[]): Promise<number> {
 
 	try {
 		if (id) {
-			getTentacle(id); // throws if not found
-			const state = await getTentacleState(id);
+			getTrack(id); // throws if not found
+			const state = await getTrackState(id);
 			if (!state) {
 				console.log(`No swarm state for "${id}" — run \`conductor run ${id}\` first`);
 				return 0;
 			}
 
-			console.log(`\n${c.bold}Tentacle: ${id}${c.reset}`);
+			console.log(`\n${c.bold}Track: ${id}${c.reset}`);
 			for (const worker of state.workers) {
 				const statusColor =
 					worker.status === "done"
@@ -441,9 +433,9 @@ async function cmdStatus(args: string[]): Promise<number> {
 				console.log(`  ${statusStr} ${title}${duration}${evalResult}${logHint}`);
 			}
 		} else {
-			const statuses = await listTentacles();
+			const statuses = await listTracks();
 			if (!statuses.length) {
-				console.log(`No tentacles. Run ${c.cyan}conductor add <name>${c.reset} to create one.`);
+				console.log(`No tracks. Run ${c.cyan}conductor add <name>${c.reset} to create one.`);
 				return 0;
 			}
 			for (const ts of statuses) {
@@ -460,7 +452,7 @@ async function cmdStatus(args: string[]): Promise<number> {
 					failed > 0 ? `  ${c.red}failed:${failed}${c.reset}` : `  failed:${failed}`;
 
 				console.log(
-					`${c.bold}${ts.tentacle.id.padEnd(20)}${c.reset} ${workers.length} workers  ${doneStr}${runningStr}${failedStr}`,
+					`${c.bold}${ts.track.id.padEnd(20)}${c.reset} ${workers.length} workers  ${doneStr}${runningStr}${failedStr}`,
 				);
 			}
 		}
@@ -496,18 +488,18 @@ function printHelp(): void {
 
 Usage:
   conductor init [--yes]                      Create .conductor/ in current directory
-  conductor add <name> [opts]                 Add a new tentacle
-    --desc="description"                      Tentacle description
+  conductor add <name> [opts]                 Add a new track
+    --desc="description"                      Track description
     --files="src/auth/**,src/users/**"        Owned file globs (comma-separated)
-  conductor rm <name>                         Remove a tentacle
-  conductor list                              List all tentacles with progress
-  conductor run <name> [opts]                 Run a tentacle's swarm
+  conductor rm <name>                         Remove a track
+  conductor list                              List all tracks with progress
+  conductor run <name> [opts]                 Run a track's swarm
     --concurrency=N                           Worker concurrency (default: 3)
     --agent=cmd                               Agent command (default: claude)
     --resume                                  Resume from existing state
-  conductor run --all                         Run all tentacles
-  conductor retry <worker-id> <tentacle>      Retry a failed worker
-  conductor logs <worker-id> <tentacle>       Print worker session log
+  conductor run --all                         Run all tracks
+  conductor retry <worker-id> <track>         Retry a failed worker
+  conductor logs <worker-id> <track>          Print worker session log
     --follow, -f                              Tail the log live
   conductor status [name]                     Show worker states with detail
   conductor ui [--port=8080]                  Start web dashboard

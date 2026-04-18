@@ -1,11 +1,11 @@
 # conductor
 
 > **Multi-agent orchestrator with eval-gated quality gates.**
-> Spawn parallel agent workers per tentacle, verify output before merging.
+> Spawn parallel agent workers per track, verify output before merging.
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v0.1.1](https://img.shields.io/badge/version-v0.1.1-brightgreen.svg)](#roadmap)
+[![v0.3.0](https://img.shields.io/badge/version-v0.3.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -23,15 +23,15 @@ layer — workers can't merge until their verifier passes.
 
 ## How it works
 
-You organize your project into **tentacles** — scoped areas of ownership, each
+You organize your project into **tracks** — scoped areas of ownership, each
 with a `CONTEXT.md` (what this area owns) and a `todo.md` (eval-gated tasks).
 
 ```
 .conductor/
   config.json
-  tentacles/
+  tracks/
     auth/
-      CONTEXT.md      ← what this tentacle owns + constraints
+      CONTEXT.md      ← what this track owns + constraints
       todo.md         ← eval-gated tasks for this area
     payments/
       CONTEXT.md
@@ -75,11 +75,11 @@ cd your-project
 git init  # must be a git repo
 conductor init
 
-# 2. Add a tentacle
+# 2. Add a track
 conductor add auth --desc="Authentication layer" --files="src/auth/**"
 
 # 3. Edit the generated todo.md with your tasks
-vim .conductor/tentacles/auth/todo.md
+vim .conductor/tracks/auth/todo.md
 
 # 4. Run
 conductor run auth
@@ -95,13 +95,13 @@ conductor status auth
 | Command | Description |
 |---------|-------------|
 | `conductor init [--yes]` | Create `.conductor/` — `--yes` skips the first-run wizard |
-| `conductor add <name> [opts]` | Add a new tentacle |
-| `conductor rm <name>` | Remove a tentacle |
-| `conductor list` | List all tentacles with color-coded progress bars |
-| `conductor run <name> [opts]` | Run a tentacle's worker swarm |
-| `conductor run --all` | Run all tentacles sequentially |
-| `conductor retry <worker-id> <tentacle>` | Retry a failed worker |
-| `conductor logs <worker-id> <tentacle>` | Print a worker's session log |
+| `conductor add <name> [opts]` | Add a new track |
+| `conductor rm <name>` | Remove a track |
+| `conductor list` | List all tracks with color-coded progress bars |
+| `conductor run <name> [opts]` | Run a track's worker swarm |
+| `conductor run --all` | Run all tracks sequentially |
+| `conductor retry <worker-id> <track>` | Retry a failed worker |
+| `conductor logs <worker-id> <track>` | Print a worker's session log |
 | `conductor status [name]` | Show worker states with duration and eval result |
 | `conductor ui [--port=8080]` | Start web dashboard |
 | `conductor help` | Show usage |
@@ -109,7 +109,7 @@ conductor status auth
 ### `conductor add` options
 
 ```
---desc="description"                    Tentacle description
+--desc="description"                    Track description
 --files="src/auth/**,src/users/**"      Owned file globs (comma-separated)
 ```
 
@@ -138,7 +138,7 @@ conductor logs eb2eadd4 auth --follow
 
 ## Task format
 
-Tasks live in `.conductor/tentacles/<name>/todo.md` and follow the
+Tasks live in `.conductor/tracks/<name>/todo.md` and follow the
 [evalgate contract format](https://github.com/jorgejac1/evalgate#contract-format):
 
 ```markdown
@@ -169,7 +169,7 @@ conductor ui
 # → http://localhost:8080
 ```
 
-The dashboard shows all tentacles in a sidebar with progress bars, and workers
+The dashboard shows all tracks in a sidebar with progress bars, and workers
 in the main panel with status badges (pending / running / verifying / done / failed).
 Failed workers have a Retry button. All updates stream live via SSE — no page refresh needed.
 
@@ -193,9 +193,9 @@ and coexist fine in the same repo.
 
 ---
 
-## Tentacle CONTEXT.md
+## Track CONTEXT.md
 
-Each tentacle gets a `CONTEXT.md` that describes what the tentacle owns. The
+Each track gets a `CONTEXT.md` that describes what the track owns. The
 conductor prompt builder injects this into each worker agent's system prompt,
 giving workers scoped context without polluting each other.
 
@@ -222,12 +222,12 @@ Edit this file freely. The next `conductor run` will pick it up.
 
 | Version | Feature | Status |
 |---------|---------|--------|
-| v0.1.0 | Core tentacle model, CLI, eval-gated workers, SSE dashboard | Shipped |
+| v0.1.0 | Core track model, CLI, eval-gated workers, SSE dashboard | Shipped |
 | v0.1.1 | Fix: initial UI state loading, progress bar derived from workers | Shipped |
 | v0.2 | Interactive init wizard, live log streaming in UI, color CLI output, `conductor logs` command | Shipped |
-| v0.3 | Daemon mode — workers survive terminal close, state recovery on restart | Planned |
+| v0.3 | Rename: tentacle → track (breaking change, filesystem path updated) | In progress |
 | v0.4 | Telegram bot gateway — run/retry/status from phone | Planned |
-| v0.5 | `conductor plan "<goal>"` — LLM generates tentacles + tasks automatically | Planned |
+| v0.5 | `conductor plan "<goal>"` — LLM generates tracks + tasks automatically | Planned |
 | v0.6 | Per-worker cost tracking, run history, `conductor report` | Planned |
 | v1.0 | Stable API, full docs, Docker image | Planned |
 

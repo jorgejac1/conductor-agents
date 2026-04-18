@@ -2,12 +2,12 @@
  * conductor web server — v0.1
  *
  * Routes:
- *   GET /                         → HTML dashboard
- *   GET /api/tentacles            → list all tentacles with status
- *   GET /api/tentacles/:id/state  → swarm state for a tentacle
- *   GET /api/events               → SSE stream (swarm state changes)
- *   POST /api/tentacles/:id/run   → trigger swarm for a tentacle
- *   POST /api/tentacles/:id/retry → retry a worker { workerId }
+ *   GET /                      → HTML dashboard
+ *   GET /api/tracks            → list all tracks with status
+ *   GET /api/tracks/:id/state  → swarm state for a track
+ *   GET /api/events            → SSE stream (swarm state changes)
+ *   POST /api/tracks/:id/run   → trigger swarm for a track
+ *   POST /api/tracks/:id/retry → retry a worker { workerId }
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -15,9 +15,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { SwarmState } from "evalgate";
 import { swarmEvents } from "evalgate";
-import { getTentacleState, retryTentacleWorker, runTentacle } from "./orchestrator.js";
-import { listTentacles } from "./tentacle.js";
-import type { TentacleStatus } from "./types.js";
+import { getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
+import { listTracks } from "./track.js";
+import type { TrackStatus } from "./types.js";
 import { htmlDashboard } from "./ui-html.js";
 
 export interface ServerOptions {
@@ -47,8 +47,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		}
 	}
 
-	function broadcastTentacles(tentacles: TentacleStatus[]): void {
-		const data = `data: ${JSON.stringify({ type: "tentacles", tentacles })}\n\n`;
+	function broadcastTracks(tracks: TrackStatus[]): void {
+		const data = `data: ${JSON.stringify({ type: "tracks", tracks })}\n\n`;
 		for (const res of sseClients) {
 			try {
 				res.write(data);
@@ -69,22 +69,22 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		});
 	}
 
-	function parseLogsUrl(url: string): { tentacleId: string; workerId: string } | null {
-		// /api/tentacles/:id/logs/:workerId
-		const prefix = "/api/tentacles/";
+	function parseLogsUrl(url: string): { trackId: string; workerId: string } | null {
+		// /api/tracks/:id/logs/:workerId
+		const prefix = "/api/tracks/";
 		if (!url.startsWith(prefix)) return null;
 		const rest = url.slice(prefix.length);
 		const logsIdx = rest.indexOf("/logs/");
 		if (logsIdx === -1) return null;
-		const tentacleId = rest.slice(0, logsIdx);
+		const trackId = rest.slice(0, logsIdx);
 		const workerId = rest.slice(logsIdx + "/logs/".length);
-		if (!tentacleId || !workerId) return null;
-		return { tentacleId, workerId };
+		if (!trackId || !workerId) return null;
+		return { trackId, workerId };
 	}
 
-	function tentacleIdFromUrl(url: string, suffix: string): string | null {
-		// /api/tentacles/<id>/state or /api/tentacles/<id>/run etc.
-		const prefix = "/api/tentacles/";
+	function trackIdFromUrl(url: string, suffix: string): string | null {
+		// /api/tracks/<id>/state or /api/tracks/<id>/run etc.
+		const prefix = "/api/tracks/";
 		if (!url.startsWith(prefix)) return null;
 		const rest = url.slice(prefix.length);
 		const idx = rest.indexOf(`/${suffix}`);
@@ -102,11 +102,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			return;
 		}
 
-		if (url === "/api/tentacles" && method === "GET") {
-			listTentacles(cwd)
-				.then((tentacles) => {
+		if (url === "/api/tracks" && method === "GET") {
+			listTracks(cwd)
+				.then((tracks) => {
 					res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-					res.end(JSON.stringify(tentacles));
+					res.end(JSON.stringify(tracks));
 				})
 				.catch((err: unknown) => {
 					res.writeHead(500, { "Content-Type": "application/json" });
@@ -115,9 +115,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			return;
 		}
 
-		const stateId = tentacleIdFromUrl(url, "state");
+		const stateId = trackIdFromUrl(url, "state");
 		if (stateId && method === "GET") {
-			getTentacleState(stateId, cwd)
+			getTrackState(stateId, cwd)
 				.then((state) => {
 					res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
 					res.end(JSON.stringify(state ?? null));
@@ -139,10 +139,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			res.write(": connected\n\n");
 			sseClients.add(res);
 
-			// Send current tentacle list immediately
-			listTentacles(cwd)
-				.then((tentacles) => {
-					broadcastTentacles(tentacles);
+			// Send current track list immediately
+			listTracks(cwd)
+				.then((tracks) => {
+					broadcastTracks(tracks);
 				})
 				.catch(() => {
 					/* ignore */
@@ -163,7 +163,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			return;
 		}
 
-		const runId = tentacleIdFromUrl(url, "run");
+		const runId = trackIdFromUrl(url, "run");
 		if (runId && method === "POST") {
 			readBody(req)
 				.then((body) => {
@@ -173,7 +173,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 					} catch {
 						/* use defaults */
 					}
-					return runTentacle(runId, { ...parsed, cwd });
+					return runTrack(runId, { ...parsed, cwd });
 				})
 				.then((result) => {
 					res.writeHead(200, { "Content-Type": "application/json" });
@@ -189,12 +189,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 
 		const logsRoute = parseLogsUrl(url);
 		if (logsRoute && method === "GET") {
-			const { tentacleId, workerId } = logsRoute;
-			getTentacleState(tentacleId, cwd)
+			const { trackId, workerId } = logsRoute;
+			getTrackState(trackId, cwd)
 				.then((state) => {
 					if (!state) {
 						res.writeHead(404, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: `No state for tentacle "${tentacleId}"` }));
+						res.end(JSON.stringify({ error: `No state for track "${trackId}"` }));
 						return;
 					}
 					const worker = state.workers.find((w) => w.id.startsWith(workerId));
@@ -223,7 +223,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			return;
 		}
 
-		const retryId = tentacleIdFromUrl(url, "retry");
+		const retryId = trackIdFromUrl(url, "retry");
 		if (retryId && method === "POST") {
 			readBody(req)
 				.then((body) => {
@@ -240,7 +240,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 					}
 					const retryOpts: { agentCmd?: string; cwd?: string } = { cwd };
 					if (parsed.agentCmd !== undefined) retryOpts.agentCmd = parsed.agentCmd;
-					return retryTentacleWorker(retryId, parsed.workerId, retryOpts).then(() => {
+					return retryTrackWorker(retryId, parsed.workerId, retryOpts).then(() => {
 						res.writeHead(200, { "Content-Type": "application/json" });
 						res.end(JSON.stringify({ ok: true }));
 					});

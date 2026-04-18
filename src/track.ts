@@ -4,11 +4,11 @@ import {
 	configDir,
 	loadConfig,
 	saveConfig,
-	tentacleContextPath,
-	tentacleDir,
-	tentacleTodoPath,
+	trackContextPath,
+	trackDir,
+	trackTodoPath,
 } from "./config.js";
-import type { ConductorConfig, Tentacle, TentacleStatus } from "./types.js";
+import type { ConductorConfig, Track, TrackStatus } from "./types.js";
 
 function slugify(name: string): string {
 	return name
@@ -31,23 +31,23 @@ function parseTodoProgress(todoMd: string): { total: number; pending: number; do
 	return { total, pending: total - done, done };
 }
 
-export function createTentacle(
+export function createTrack(
 	name: string,
 	description: string,
 	files: string[],
 	cwd = process.cwd(),
-): Tentacle {
+): Track {
 	const id = slugify(name);
 	const config = loadConfig(cwd) ?? {
-		tentacles: [],
+		tracks: [],
 		defaults: { concurrency: 3, agentCmd: "claude" },
 	};
 
-	if (config.tentacles.some((t) => t.id === id)) {
-		throw new Error(`Tentacle "${id}" already exists`);
+	if (config.tracks.some((t) => t.id === id)) {
+		throw new Error(`Track "${id}" already exists`);
 	}
 
-	const dir = tentacleDir(id, cwd);
+	const dir = trackDir(id, cwd);
 	mkdirSync(dir, { recursive: true });
 
 	const filesSection =
@@ -71,37 +71,37 @@ ${filesSection}
 <!--   - eval: \`your verifier command\` -->
 `;
 
-	writeFileSync(tentacleContextPath(id, cwd), contextMd, "utf8");
-	writeFileSync(tentacleTodoPath(id, cwd), todoMd, "utf8");
+	writeFileSync(trackContextPath(id, cwd), contextMd, "utf8");
+	writeFileSync(trackTodoPath(id, cwd), todoMd, "utf8");
 
-	const tentacle: Tentacle = { id, name, description, files };
-	config.tentacles.push(tentacle);
+	const track: Track = { id, name, description, files };
+	config.tracks.push(track);
 	saveConfig(config, cwd);
 
-	return tentacle;
+	return track;
 }
 
-export function deleteTentacle(id: string, cwd = process.cwd()): void {
+export function deleteTrack(id: string, cwd = process.cwd()): void {
 	const config = loadConfig(cwd);
 	if (!config) throw new Error("No conductor config found. Run `conductor init` first.");
 
-	const idx = config.tentacles.findIndex((t) => t.id === id);
-	if (idx === -1) throw new Error(`Tentacle "${id}" not found`);
+	const idx = config.tracks.findIndex((t) => t.id === id);
+	if (idx === -1) throw new Error(`Track "${id}" not found`);
 
-	const dir = tentacleDir(id, cwd);
+	const dir = trackDir(id, cwd);
 	if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
 
-	config.tentacles.splice(idx, 1);
+	config.tracks.splice(idx, 1);
 	saveConfig(config, cwd);
 }
 
-export async function listTentacles(cwd = process.cwd()): Promise<TentacleStatus[]> {
+export async function listTracks(cwd = process.cwd()): Promise<TrackStatus[]> {
 	const config = loadConfig(cwd);
 	if (!config) return [];
 
-	const results: TentacleStatus[] = [];
-	for (const tentacle of config.tentacles) {
-		const todoPath = tentacleTodoPath(tentacle.id, cwd);
+	const results: TrackStatus[] = [];
+	for (const track of config.tracks) {
+		const todoPath = trackTodoPath(track.id, cwd);
 		let todoTotal = 0;
 		let todoPending = 0;
 		let todoDone = 0;
@@ -128,16 +128,16 @@ export async function listTentacles(cwd = process.cwd()): Promise<TentacleStatus
 			todoDone = prog.done;
 		}
 
-		results.push({ tentacle, todoTotal, todoPending, todoDone, swarmState });
+		results.push({ track, todoTotal, todoPending, todoDone, swarmState });
 	}
 	return results;
 }
 
-export function getTentacle(id: string, cwd = process.cwd()): Tentacle {
+export function getTrack(id: string, cwd = process.cwd()): Track {
 	const config = loadConfig(cwd);
 	if (!config) throw new Error("No conductor config found. Run `conductor init` first.");
-	const t = config.tentacles.find((t) => t.id === id);
-	if (!t) throw new Error(`Tentacle "${id}" not found`);
+	const t = config.tracks.find((t) => t.id === id);
+	if (!t) throw new Error(`Track "${id}" not found`);
 	return t;
 }
 
@@ -149,7 +149,7 @@ export function initConductor(cwd = process.cwd()): void {
 	mkdirSync(dir, { recursive: true });
 
 	const initial: ConductorConfig = {
-		tentacles: [],
+		tracks: [],
 		defaults: { concurrency: 3, agentCmd: "claude" },
 	};
 	saveConfig(initial, cwd);

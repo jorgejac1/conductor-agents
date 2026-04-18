@@ -20,9 +20,7 @@ describe("config", () => {
 		const dir = mkdtempSync(join(tmpdir(), "conductor-test-"));
 		try {
 			const config = {
-				tentacles: [
-					{ id: "auth", name: "Auth", description: "Auth module", files: ["src/auth/**"] },
-				],
+				tracks: [{ id: "auth", name: "Auth", description: "Auth module", files: ["src/auth/**"] }],
 				defaults: { concurrency: 3, agentCmd: "claude" },
 			};
 			saveConfig(config, dir);
@@ -43,20 +41,20 @@ describe("config", () => {
 		const dir = mkdtempSync(join(tmpdir(), "conductor-test-"));
 		try {
 			const config1 = {
-				tentacles: [],
+				tracks: [],
 				defaults: { concurrency: 3, agentCmd: "claude" },
 			};
 			saveConfig(config1, dir);
 
 			const config2 = {
-				tentacles: [{ id: "backend", name: "Backend", description: "Backend", files: [] }],
+				tracks: [{ id: "backend", name: "Backend", description: "Backend", files: [] }],
 				defaults: { concurrency: 5, agentCmd: "codex" },
 			};
 			saveConfig(config2, dir);
 
 			const loaded = loadConfig(dir);
 			assert.strictEqual(loaded?.defaults.concurrency, 5);
-			assert.strictEqual(loaded?.tentacles.length, 1);
+			assert.strictEqual(loaded?.tracks.length, 1);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

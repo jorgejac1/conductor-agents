@@ -4,9 +4,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { tentacleTodoPath } from "../src/config.js";
-import { getTentacleState, runTentacle } from "../src/orchestrator.js";
-import { createTentacle, initConductor } from "../src/tentacle.js";
+import { trackTodoPath } from "../src/config.js";
+import { getTrackState, runTrack } from "../src/orchestrator.js";
+import { createTrack, initConductor } from "../src/track.js";
 
 function tmpDir(initGit = false): string {
 	const dir = mkdtempSync(join(tmpdir(), "conductor-orch-"));
@@ -17,41 +17,41 @@ function tmpDir(initGit = false): string {
 }
 
 describe("orchestrator", () => {
-	it("getTentacleState returns null when no state exists", async () => {
+	it("getTrackState returns null when no state exists", async () => {
 		const dir = tmpDir();
 		try {
 			initConductor(dir);
-			createTentacle("Alpha", "Test", [], dir);
-			const state = await getTentacleState("alpha", dir);
+			createTrack("Alpha", "Test", [], dir);
+			const state = await getTrackState("alpha", dir);
 			assert.strictEqual(state, null);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	it("runTentacle throws when tentacle does not exist", async () => {
+	it("runTrack throws when track does not exist", async () => {
 		const dir = tmpDir();
 		try {
 			initConductor(dir);
-			await assert.rejects(() => runTentacle("nonexistent", { cwd: dir }), /not found/);
+			await assert.rejects(() => runTrack("nonexistent", { cwd: dir }), /not found/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	it("runTentacle with true verifier completes all workers", async () => {
+	it("runTrack with true verifier completes all workers", async () => {
 		const dir = tmpDir(true);
 		try {
 			initConductor(dir);
-			createTentacle("Beta", "Beta feature", [], dir);
+			createTrack("Beta", "Beta feature", [], dir);
 
-			const todoPath = tentacleTodoPath("beta", dir);
+			const todoPath = trackTodoPath("beta", dir);
 			writeFileSync(
 				todoPath,
 				["- [ ] Task one", "  - eval: `true`", "- [ ] Task two", "  - eval: `true`"].join("\n"),
 			);
 
-			const result = await runTentacle("beta", {
+			const result = await runTrack("beta", {
 				concurrency: 1,
 				agentCmd: "echo",
 				cwd: dir,
@@ -66,19 +66,19 @@ describe("orchestrator", () => {
 		}
 	});
 
-	it("runTentacle with false verifier marks workers failed", async () => {
+	it("runTrack with false verifier marks workers failed", async () => {
 		const dir = tmpDir(true);
 		try {
 			initConductor(dir);
-			createTentacle("Gamma", "Gamma feature", [], dir);
+			createTrack("Gamma", "Gamma feature", [], dir);
 
-			const todoPath = tentacleTodoPath("gamma", dir);
+			const todoPath = trackTodoPath("gamma", dir);
 			writeFileSync(
 				todoPath,
 				["- [ ] Failing task", "  - eval: `false`", "  - retries: 0"].join("\n"),
 			);
 
-			const result = await runTentacle("gamma", {
+			const result = await runTrack("gamma", {
 				concurrency: 1,
 				agentCmd: "echo",
 				cwd: dir,

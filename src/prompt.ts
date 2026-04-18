@@ -1,15 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { Contract } from "evalgate";
-import { tentacleContextPath } from "./config.js";
-import type { Tentacle } from "./types.js";
+import { trackContextPath } from "./config.js";
+import type { Track } from "./types.js";
 
 export function buildWorkerPrompt(
-	tentacle: Tentacle,
+	track: Track,
 	contract: Contract,
 	worktreePath: string,
 	cwd = process.cwd(),
 ): string {
-	const contextPath = tentacleContextPath(tentacle.id, cwd);
+	const contextPath = trackContextPath(track.id, cwd);
 	const contextContent = existsSync(contextPath) ? readFileSync(contextPath, "utf8") : "";
 
 	const verifierInfo =
@@ -17,7 +17,7 @@ export function buildWorkerPrompt(
 			? `Verifier command: \`${contract.verifier.command}\``
 			: "No verifier configured";
 
-	return `You are a coding agent working on the "${tentacle.name}" area of the codebase.
+	return `You are a coding agent working on the "${track.name}" area of the codebase.
 
 ## Context
 
@@ -37,6 +37,6 @@ Work only in this worktree. When you are done, commit your changes with a descri
 The verifier will run automatically after you finish. If it fails, you will see the error output and should fix it.
 
 Do not modify files outside your owned paths:
-${tentacle.files.map((f) => `- ${f}`).join("\n") || "- (all files)"}
+${track.files.map((f) => `- ${f}`).join("\n") || "- (all files)"}
 `;
 }
