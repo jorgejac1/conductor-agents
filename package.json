@@ -1,6 +1,6 @@
 {
   "name": "conductor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Multi-agent orchestrator with eval-gated quality gates. Spawn parallel agent workers per tentacle, verify output before merging.",
   "type": "module",
   "bin": {

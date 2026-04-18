@@ -287,6 +287,9 @@ export function htmlDashboard(): string {
         const msg = JSON.parse(e.data);
         if (msg.type === 'tentacles') {
           tentacles = msg.tentacles;
+          for (const ts of tentacles) {
+            if (ts.swarmState) swarmStates[ts.tentacle.id] = ts.swarmState;
+          }
           renderSidebar();
           updateStats();
           if (selectedId) renderMain(selectedId);
@@ -340,7 +343,7 @@ export function htmlDashboard(): string {
     if (!ts) return;
 
     const state = swarmStates[id] || null;
-    const workers = state ? Object.values(state.workers) : [];
+    const workers = state ? state.workers : [];
 
     const main = document.getElementById('main-content');
     const runBtn = \`<button class="btn primary" onclick="runTentacle('\${id}')">▶ Run</button>\`;
@@ -400,7 +403,7 @@ export function htmlDashboard(): string {
   function updateStats() {
     let total = 0, done = 0, running = 0, failed = 0;
     for (const state of Object.values(swarmStates)) {
-      for (const w of Object.values(state.workers || {})) {
+      for (const w of (state.workers || [])) {
         total++;
         if (w.status === 'done') done++;
         else if (['spawning','running','verifying','merging'].includes(w.status)) running++;
@@ -427,6 +430,9 @@ export function htmlDashboard(): string {
     .then(r => r.json())
     .then(data => {
       tentacles = data;
+      for (const ts of tentacles) {
+        if (ts.swarmState) swarmStates[ts.tentacle.id] = ts.swarmState;
+      }
       renderSidebar();
       updateStats();
     })

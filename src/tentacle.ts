@@ -106,22 +106,27 @@ export async function listTentacles(cwd = process.cwd()): Promise<TentacleStatus
 		let todoPending = 0;
 		let todoDone = 0;
 
-		if (existsSync(todoPath)) {
-			const src = readFileSync(todoPath, "utf8");
-			const prog = parseTodoProgress(src);
-			todoTotal = prog.total;
-			todoPending = prog.pending;
-			todoDone = prog.done;
-		}
-
-		const swarmStatePath = `${tentacleDir(tentacle.id, cwd)}/.evalgate/swarm-state.json`;
 		let swarmState = null;
 		try {
 			swarmState = await loadState(todoPath);
 		} catch {
 			// no swarm state yet
 		}
-		void swarmStatePath; // path computed for clarity but loadState uses todoPath dir
+
+		if (swarmState) {
+			// Derive progress from worker outcomes — workers run in isolated worktrees
+			// and never modify the original todo.md, so markdown checkbox parsing is useless.
+			todoTotal = swarmState.workers.length;
+			todoDone = swarmState.workers.filter((w) => w.status === "done").length;
+			todoPending = todoTotal - todoDone;
+		} else if (existsSync(todoPath)) {
+			// No run yet — count unchecked tasks in todo.md as a pre-run estimate
+			const src = readFileSync(todoPath, "utf8");
+			const prog = parseTodoProgress(src);
+			todoTotal = prog.total;
+			todoPending = prog.pending;
+			todoDone = prog.done;
+		}
 
 		results.push({ tentacle, todoTotal, todoPending, todoDone, swarmState });
 	}
