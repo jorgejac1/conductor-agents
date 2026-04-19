@@ -9,7 +9,7 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v0.9.0](https://img.shields.io/badge/version-v0.9.0-brightgreen.svg)](#roadmap)
+[![v1.0.0](https://img.shields.io/badge/version-v1.0.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -124,6 +124,7 @@ conductor status auth
 | `conductor telegram setup` | Configure Telegram bot token + chat ID |
 | `conductor telegram [start]` | Start Telegram bot (foreground) |
 | `conductor ui [--port=8080]` | Start web dashboard |
+| `conductor doctor` | Health check config, tracks, and environment |
 | `conductor help` | Show usage |
 
 ### `conductor add` options
@@ -304,6 +305,122 @@ Edit this file freely. The next `conductor run` will pick it up.
 
 ---
 
+## Health check (`conductor doctor`)
+
+`conductor doctor` audits your project and reports any issues before you run:
+
+```
+conductor doctor
+```
+
+```
+conductor doctor  /your/project
+
+Config
+  ✔  config.json exists
+  ✔  config.json schema is valid
+
+Tracks  (2 configured)
+  ✔  auth/todo.md exists
+  ✔  auth: 3 task(s) with eval verifiers
+  ✔  payments/todo.md exists
+  ⚠  payments: 1 task(s) have no eval verifier: "Update Stripe keys"
+
+Git worktrees
+  ✔  no stale worktrees detected
+
+Dependencies
+  ✔  evalgate 1.0.0 installed (required: ^1.0.0)
+  ✔  agent "claude" found on PATH
+
+All checks passed.
+```
+
+Checks performed:
+1. `.conductor/config.json` exists and passes schema validation
+2. Each track has a `todo.md` file
+3. Each task has an `eval:` verifier (warns if missing)
+4. No stale git worktrees from previous crashed runs
+5. evalgate version satisfies the declared dependency range
+6. Agent commands (`claude`, or custom `agentCmd`) are on `$PATH`
+7. Any `schedule` cron expressions are valid
+
+---
+
+## Programmatic API
+
+`conductor-agents` can be used as a library in addition to the CLI:
+
+```bash
+npm install conductor-agents
+```
+
+```ts
+import { runTrack, listTracks, loadConfig, validateConfig } from "conductor-agents";
+
+// Load and validate config
+const config = loadConfig("/your/project");
+
+// Run a track's swarm
+const result = await runTrack("auth", { cwd: "/your/project", concurrency: 2 });
+
+// Check all tracks
+const tracks = await listTracks("/your/project");
+
+// Start the HTTP server programmatically
+import { startServer } from "conductor-agents";
+const server = await startServer({ port: 8080, cwd: "/your/project" });
+// ... later:
+server.close();
+```
+
+Full API surface:
+
+```ts
+// Config
+loadConfig, saveConfig, validateConfig, configDir, configPath, trackDir, trackTodoPath, trackContextPath
+// Tracks
+createTrack, deleteTrack, getTrack, listTracks, initConductor
+// Orchestration
+runTrack, runAll, retryTrackWorker, getTrackState, getTrackCost
+// Server
+startServer
+// MCP
+startMcpServer
+// Planner
+generatePlan, applyPlan, parsePlanDraft, buildContextSnapshot
+// Types
+ConductorConfig, Track, TrackStatus, TrackCostSummary, TelegramBotConfig
+```
+
+---
+
+## Docker
+
+```bash
+docker pull ghcr.io/jorgejac1/conductor-agents:latest
+```
+
+Or build locally:
+
+```bash
+docker build -t conductor-agents .
+```
+
+Mount your project directory and run any conductor command:
+
+```bash
+# Health check
+docker run --rm -v $(pwd):/app conductor-agents doctor /app
+
+# Run a track (requires git + agent command inside container or mounted)
+docker run --rm -v $(pwd):/app conductor-agents run auth /app
+```
+
+The image is based on `node:22-slim` with `git` installed (required for worktrees).
+
+---
+
 ## Roadmap
 
 | Version | Feature | Status |
@@ -318,7 +435,7 @@ Edit this file freely. The next `conductor run` will pick it up.
 | v0.7 | UI v2 — 4-tab layout: Tracks deck (kanban with eval badges), Workers, History, Settings | Shipped |
 | v0.8 | MCP server — `conductor mcp` over stdio; tools: list/run/retry/status/cost from any Claude conversation | Shipped |
 | v0.9 | Scheduling + webhooks — `conductor schedule add/list/rm/start`, `conductor webhook start` | Shipped |
-| v1.0 | Stable API, full docs, Docker image, `conductor doctor` | Planned |
+| v1.0 | Stable API, programmatic API export, Docker image, `conductor doctor`, config validation. CONTEXT.md injection into every agent worker, `agentArgs` config field (per-track and global default) for non-Claude CLIs, `{task}` placeholder support, UI badge consistency fixes | Shipped |
 
 ---
 
