@@ -13,6 +13,7 @@ export interface Track {
 	agentCmd?: string; // override default agent
 	concurrency?: number; // override default concurrency
 	schedule?: string; // 5-field cron expression, e.g. "0 9 * * 1-5"
+	agentArgs?: string[]; // e.g. ["--full-auto", "{task}"] for codex; {task} is replaced with context+title
 }
 
 export interface ConductorConfig {
@@ -20,6 +21,7 @@ export interface ConductorConfig {
 	defaults: {
 		concurrency: number; // 3
 		agentCmd: string; // "claude"
+		agentArgs?: string[]; // global default agentArgs; overridden per-track
 	};
 	telegram?: TelegramBotConfig;
 }

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { trackTodoPath } from "../src/config.js";
+import { trackContextPath, trackTodoPath } from "../src/config.js";
 import { getTrackState, runTrack } from "../src/orchestrator.js";
 import { createTrack, initConductor } from "../src/track.js";
 
@@ -86,6 +86,74 @@ describe("orchestrator", () => {
 
 			const failed = result.state.workers.filter((w) => w.status === "failed").length;
 			assert.strictEqual(failed, 1);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("runTrack injects CONTEXT.md content into the agent prompt", async () => {
+		const dir = tmpDir(true);
+		try {
+			initConductor(dir);
+			createTrack("Delta", "Delta feature", ["src/delta/**"], dir);
+
+			// Write a known context string to CONTEXT.md
+			const ctxPath = trackContextPath("delta", dir);
+			writeFileSync(
+				ctxPath,
+				"# Delta\n\nThis is the delta context.\n\n## Constraints\n- No side effects\n",
+			);
+
+			const todoPath = trackTodoPath("delta", dir);
+			writeFileSync(todoPath, "- [ ] Delta task\n  - eval: `true`\n");
+
+			// Use node to print argv[1] (the full prompt) to stdout so it appears in the log
+			const result = await runTrack("delta", {
+				concurrency: 1,
+				agentCmd: "node",
+				cwd: dir,
+			});
+
+			assert.strictEqual(result.state.workers.length, 1);
+			const worker = result.state.workers[0];
+			assert.ok(worker, "worker should exist");
+
+			// The worker log should contain both the context and the task title
+			const log = readFileSync(worker.logPath, "utf8");
+			assert.ok(
+				log.includes("This is the delta context"),
+				"CONTEXT.md content should appear in log",
+			);
+			assert.ok(log.includes("Delta task"), "task title should appear in log");
+			assert.ok(log.includes("## Task"), "Task section separator should appear");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("runTrack works when CONTEXT.md does not exist", async () => {
+		const dir = tmpDir(true);
+		try {
+			initConductor(dir);
+			createTrack("Epsilon", "Epsilon feature", [], dir);
+
+			// Remove the auto-created CONTEXT.md
+			const ctxPath = trackContextPath("epsilon", dir);
+			rmSync(ctxPath, { force: true });
+
+			const todoPath = trackTodoPath("epsilon", dir);
+			writeFileSync(todoPath, "- [ ] Epsilon task\n  - eval: `true`\n");
+
+			// Should not throw even without CONTEXT.md
+			const result = await runTrack("epsilon", {
+				concurrency: 1,
+				agentCmd: "echo",
+				cwd: dir,
+			});
+
+			assert.strictEqual(result.state.workers.length, 1);
+			const failed = result.state.workers.filter((w) => w.status === "failed").length;
+			assert.strictEqual(failed, 0);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

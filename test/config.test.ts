@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { configPath, loadConfig, saveConfig } from "../src/config.js";
+import { configPath, loadConfig, saveConfig, validateConfig } from "../src/config.js";
 
 describe("config", () => {
 	it("returns null when config file does not exist", () => {
@@ -35,6 +35,48 @@ describe("config", () => {
 		const p = configPath("/some/project");
 		assert.ok(p.includes(".conductor"));
 		assert.ok(p.endsWith("config.json"));
+	});
+
+	it("validateConfig accepts agentArgs on a track", () => {
+		const cfg = {
+			tracks: [
+				{
+					id: "auth",
+					name: "Auth",
+					description: "Auth module",
+					files: [],
+					agentArgs: ["--full-auto", "{task}"],
+				},
+			],
+			defaults: { concurrency: 3, agentCmd: "claude" },
+		};
+		assert.doesNotThrow(() => validateConfig(cfg));
+	});
+
+	it("validateConfig accepts agentArgs on defaults", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 3, agentCmd: "codex", agentArgs: ["--prompt", "{task}"] },
+		};
+		assert.doesNotThrow(() => validateConfig(cfg));
+	});
+
+	it("validateConfig rejects non-array agentArgs on a track", () => {
+		const cfg = {
+			tracks: [
+				{ id: "auth", name: "Auth", description: "", files: [], agentArgs: "--not-an-array" },
+			],
+			defaults: { concurrency: 3, agentCmd: "claude" },
+		};
+		assert.throws(() => validateConfig(cfg), /agentArgs: must be an array of strings/);
+	});
+
+	it("validateConfig rejects non-array agentArgs on defaults", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 3, agentCmd: "claude", agentArgs: 42 },
+		};
+		assert.throws(() => validateConfig(cfg), /agentArgs: must be an array of strings/);
 	});
 
 	it("overwrites existing config on second save", () => {

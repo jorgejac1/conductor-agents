@@ -36,9 +36,11 @@ export async function cmdStatus(args: string[]): Promise<number> {
 				const evalResult =
 					worker.status === "done"
 						? `  ${c.green}✓ eval passed${c.reset}`
-						: worker.status === "failed"
+						: worker.status === "failed" && worker.verifierPassed === false
 							? `  ${c.red}✗ eval failed${c.reset}`
-							: "";
+							: worker.status === "failed"
+								? `  ${c.red}✗ failed (merge/spawn error)${c.reset}`
+								: "";
 
 				const logHint =
 					worker.status === "failed"

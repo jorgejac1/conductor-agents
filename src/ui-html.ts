@@ -717,7 +717,7 @@ export function htmlDashboard(): string {
         const pill = evalPassed
           ? '<span class="eval-badge pass">PASS</span>'
           : evalFailed
-            ? '<span class="eval-badge fail">FAIL</span>'
+            ? '<span class="eval-badge fail">FAILED</span>'
             : '<span class="badge ' + escHtml(w.status) + '">' + escHtml(w.status) + '</span>';
         return '<div class="kanban-card" id="kcard-' + escHtml(w.id) + '" onclick="toggleKanbanLog(' + Q + escHtml(ts.track.id) + Q + ',' + Q + escHtml(w.id) + Q + ')">' +
           '<div class="kanban-card-title">' + escHtml(w.contractTitle || w.contractId) + '</div>' +
@@ -831,7 +831,7 @@ export function htmlDashboard(): string {
       const evalBadge = evalPassed
         ? '<span class="eval-badge pass">PASS</span>'
         : evalFailed
-          ? '<span class="eval-badge fail">FAIL</span>'
+          ? '<span class="eval-badge fail">FAILED</span>'
           : '';
       const statusPill = showStatusPill
         ? '<span class="badge ' + escHtml(w.status) + '">' + escHtml(w.status) + '</span>'

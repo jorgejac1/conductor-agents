@@ -1,14 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { SwarmOptions, SwarmResult, SwarmState } from "evalgate";
-import {
-	getBudgetSummary,
-	loadState,
-	parseTodo,
-	retryWorker,
-	runSwarm,
-	swarmEvents,
-} from "evalgate";
-import { trackTodoPath } from "./config.js";
+import { getBudgetSummary, loadState, parseTodo, retryWorker, runSwarm } from "evalgate";
+import { loadConfig, trackContextPath, trackTodoPath } from "./config.js";
 import { getTrack } from "./track.js";
 
 export interface RunTrackOpts {
@@ -21,12 +14,19 @@ export interface RunTrackOpts {
 export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<SwarmResult> {
 	const cwd = opts.cwd ?? process.cwd();
 	const track = getTrack(id, cwd);
+	const config = loadConfig(cwd);
 
 	const todoPath = trackTodoPath(id, cwd);
+	const ctxPath = trackContextPath(id, cwd);
+	const taskContext = existsSync(ctxPath) ? readFileSync(ctxPath, "utf8") : undefined;
+
+	const resolvedAgentArgs = track.agentArgs ?? config?.defaults.agentArgs;
 	const swarmOpts: SwarmOptions = {
 		todoPath,
-		concurrency: opts.concurrency ?? track.concurrency ?? 3,
-		agentCmd: opts.agentCmd ?? track.agentCmd ?? "claude",
+		concurrency: opts.concurrency ?? track.concurrency ?? config?.defaults.concurrency ?? 3,
+		agentCmd: opts.agentCmd ?? track.agentCmd ?? config?.defaults.agentCmd ?? "claude",
+		...(resolvedAgentArgs !== undefined && { agentArgs: resolvedAgentArgs }),
+		...(taskContext !== undefined && { taskContext }),
 		resume: opts.resume ?? false,
 	};
 
@@ -40,15 +40,25 @@ export async function retryTrackWorker(
 ): Promise<void> {
 	const cwd = opts.cwd ?? process.cwd();
 	const track = getTrack(id, cwd);
+	const config = loadConfig(cwd);
 	const todoPath = trackTodoPath(id, cwd);
-	const agentCmd = opts.agentCmd ?? track.agentCmd ?? "claude";
+	const agentCmd = opts.agentCmd ?? track.agentCmd ?? config?.defaults.agentCmd ?? "claude";
+
+	const ctxPath = trackContextPath(id, cwd);
+	const taskContext = existsSync(ctxPath) ? readFileSync(ctxPath, "utf8") : undefined;
 
 	// Resolve prefix to full worker ID
 	const state = await loadState(todoPath);
 	const match = state?.workers.find((w) => w.id.startsWith(workerId));
 	if (!match) throw new Error(`worker not found: ${workerId}`);
 
-	await retryWorker(match.id, todoPath, { todoPath, agentCmd });
+	const resolvedAgentArgs = track.agentArgs ?? config?.defaults.agentArgs;
+	await retryWorker(match.id, todoPath, {
+		todoPath,
+		agentCmd,
+		...(resolvedAgentArgs !== undefined && { agentArgs: resolvedAgentArgs }),
+		...(taskContext !== undefined && { taskContext }),
+	});
 }
 
 export async function getTrackState(id: string, cwd = process.cwd()): Promise<SwarmState | null> {
@@ -64,7 +74,6 @@ export async function runAll(
 	opts: RunTrackOpts & { trackIds?: string[] } = {},
 ): Promise<Map<string, SwarmResult>> {
 	const cwd = opts.cwd ?? process.cwd();
-	const { loadConfig } = await import("./config.js");
 	const config = loadConfig(cwd);
 	if (!config) throw new Error("No conductor config found. Run `conductor init` first.");
 
@@ -86,5 +95,3 @@ export function getTrackCost(id: string, cwd = process.cwd()): ReturnType<typeof
 	const contracts = parseTodo(source);
 	return getBudgetSummary(todoPath, contracts);
 }
-
-export { swarmEvents };
