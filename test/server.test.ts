@@ -204,4 +204,62 @@ describe("server", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("GET /api/config returns conductor config", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Config Track", "config test track", [], dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/config`);
+			assert.strictEqual(res.status, 200);
+			const data = (await res.json()) as { tracks?: { id: string }[] };
+			assert.ok(Array.isArray(data.tracks), "config.tracks should be an array");
+			assert.strictEqual(data.tracks[0].id, "config-track");
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("GET /api/version returns conductor and evalgate versions", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/version`);
+			assert.strictEqual(res.status, 200);
+			const data = (await res.json()) as { conductor?: string; evalgate?: string };
+			assert.ok(
+				typeof data.conductor === "string" && data.conductor.length > 0,
+				"conductor version must be a non-empty string",
+			);
+			assert.ok(
+				typeof data.evalgate === "string" && data.evalgate.length > 0,
+				"evalgate version must be a non-empty string",
+			);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("GET /api/tracks/:id/history returns run history array", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("History Track", "history test", [], dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/tracks/history-track/history`);
+			assert.strictEqual(res.status, 200);
+			const data = await res.json();
+			assert.ok(Array.isArray(data), "history endpoint must return an array");
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

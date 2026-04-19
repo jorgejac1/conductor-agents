@@ -1,6 +1,6 @@
 {
   "name": "conductor-agents",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Multi-agent orchestrator with eval-gated quality gates. Spawn parallel agent workers per track, verify output before merging.",
   "type": "module",
   "bin": {

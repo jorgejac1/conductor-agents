@@ -14,8 +14,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { SwarmState } from "evalgate";
-import { swarmEvents } from "evalgate";
-import { loadConfig } from "./config.js";
+import { queryRuns, swarmEvents } from "evalgate";
+import { loadConfig, trackTodoPath } from "./config.js";
 import { getTrackCost, getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
 import { listTracks } from "./track.js";
 import type { TrackStatus } from "./types.js";
@@ -74,6 +74,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 	}
 	swarmEvents.on("cost", broadcastCost);
 
+	// Forward eval-result events to SSE clients
+	function broadcastEvalResult(evt: unknown): void {
+		const data = `data: ${JSON.stringify({ type: "eval-result", ...(evt as object) })}\n\n`;
+		for (const res of sseClients) {
+			try {
+				res.write(data);
+			} catch {
+				sseClients.delete(res);
+			}
+		}
+	}
+	swarmEvents.on("eval-result", broadcastEvalResult);
+
 	function readBody(req: IncomingMessage): Promise<string> {
 		return new Promise((resolve, reject) => {
 			const chunks: Buffer[] = [];
@@ -106,7 +119,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		return rest.slice(0, idx) || null;
 	}
 
-	function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+	async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		const url = req.url ?? "/";
 		const method = req.method ?? "GET";
 
@@ -288,11 +301,50 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			return;
 		}
 
+		const historyId = trackIdFromUrl(url, "history");
+		if (historyId && method === "GET") {
+			const todoPath = trackTodoPath(historyId, cwd);
+			const runs = queryRuns(todoPath, { limit: 100 });
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+			res.end(JSON.stringify(runs));
+			return;
+		}
+
+		if (url === "/api/config" && method === "GET") {
+			const cfg = loadConfig(cwd);
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+			res.end(JSON.stringify(cfg ?? {}));
+			return;
+		}
+
+		if (url === "/api/version" && method === "GET") {
+			const { createRequire } = await import("node:module");
+			const req2 = createRequire(import.meta.url);
+			const conductorVersion = (req2("../package.json") as { version: string }).version;
+			let evalgateVersion = "unknown";
+			try {
+				evalgateVersion = (req2("evalgate/package.json") as { version: string }).version;
+			} catch {
+				/* evalgate package.json not accessible */
+			}
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+			res.end(JSON.stringify({ conductor: conductorVersion, evalgate: evalgateVersion }));
+			return;
+		}
+
 		res.writeHead(404, { "Content-Type": "text/plain" });
 		res.end("not found");
 	}
 
-	const server = createServer(handleRequest);
+	const server = createServer((req, res) => {
+		handleRequest(req, res).catch((err: unknown) => {
+			const message = err instanceof Error ? err.message : String(err);
+			if (!res.headersSent) {
+				res.writeHead(500, { "Content-Type": "application/json" });
+			}
+			res.end(JSON.stringify({ error: message }));
+		});
+	});
 	await new Promise<void>((resolve) => server.listen(port, resolve));
 	const actualPort = (server.address() as AddressInfo).port;
 
@@ -301,6 +353,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		stop() {
 			swarmEvents.off("state", broadcastSwarm);
 			swarmEvents.off("cost", broadcastCost);
+			swarmEvents.off("eval-result", broadcastEvalResult);
 			for (const res of sseClients) {
 				try {
 					res.end();

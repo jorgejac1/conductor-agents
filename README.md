@@ -9,7 +9,7 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v0.6.0](https://img.shields.io/badge/version-v0.6.0-brightgreen.svg)](#roadmap)
+[![v0.7.0](https://img.shields.io/badge/version-v0.7.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -268,7 +268,10 @@ Edit this file freely. The next `conductor run` will pick it up.
 | v0.4 | Telegram bot gateway — run/retry/status from phone | Shipped |
 | v0.5 | `conductor plan "<goal>"` — LLM generates tracks + tasks automatically | Shipped |
 | v0.6 | Per-track cost tracking, `conductor report`, `/api/tracks/:id/cost`, SSE cost events | Shipped |
-| v1.0 | Stable API, full docs, Docker image | Planned |
+| v0.7 | UI v2 — 4-tab layout: Tracks deck (kanban with eval badges), Workers, History, Settings | Shipped |
+| v0.8 | MCP server — `conductor mcp` over stdio; tools: list/run/retry/status/cost from any Claude conversation | Planned |
+| v0.9 | Scheduling + webhooks — `conductor schedule add <track> "<cron>"`, `conductor webhook start` | Planned |
+| v1.0 | Stable API, full docs, Docker image, `conductor doctor` | Planned |
 
 ---
 
