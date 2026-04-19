@@ -709,6 +709,7 @@ Usage:
   conductor plan apply [--dry-run]            Apply plan-draft.md to create tracks
   conductor plan show                         Print current plan draft
   conductor report [track]                    Show cost report (tokens + estimated USD)
+  conductor mcp                               Start MCP server (stdio)
   conductor help                              Show this help
 `);
 }
@@ -760,6 +761,17 @@ async function main(): Promise<void> {
 		case "report":
 			exitCode = await cmdReport(args);
 			break;
+		case "mcp": {
+			// startMcpServer runs indefinitely (readline keeps node alive).
+			// Return early so main() does NOT call process.exit(), which would
+			// kill the server before it can respond to any requests.
+			// An optional positional arg overrides the working directory so the
+			// server can be pointed at a different conductor project root.
+			const { startMcpServer } = await import("./mcp.js");
+			const mcpCwd = positionalArgs(args)[0] ?? process.cwd();
+			startMcpServer(mcpCwd);
+			return;
+		}
 		case "help":
 		case "--help":
 		case "-h":

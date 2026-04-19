@@ -453,6 +453,24 @@ export function htmlDashboard(): string {
     text-align: center;
     z-index: 100;
   }
+  #toast {
+    position: fixed;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    background: rgba(35,134,54,0.15);
+    border: 1px solid var(--green);
+    color: var(--green);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    max-width: 500px;
+    text-align: center;
+    z-index: 100;
+    opacity: 0;
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
@@ -526,6 +544,7 @@ export function htmlDashboard(): string {
 </div>
 
 <div class="error-bar" id="error-bar"></div>
+<div id="toast"></div>
 
 <div class="status-bar">
   <span>Workers: <b id="stat-total">0</b></span>
@@ -671,7 +690,7 @@ export function htmlDashboard(): string {
           '</div>';
       });
 
-      const runBtn = '<button class="btn btn-sm" onclick="event.stopPropagation();runTrack(' + Q + escHtml(ts.track.id) + Q + ')">▶ Run</button>';
+      const runBtn = '<button class="btn btn-sm" data-run-id="' + escHtml(ts.track.id) + '" onclick="event.stopPropagation();runTrack(' + Q + escHtml(ts.track.id) + Q + ')">▶ Run</button>';
 
       return '<div class="kanban-column">' +
         '<div class="kanban-col-header">' +
@@ -750,7 +769,7 @@ export function htmlDashboard(): string {
     if (!workers.length) {
       content.innerHTML =
         '<div class="track-header"><h2>' + escHtml(ts.track.name) + '</h2>' +
-        '<button class="btn primary" onclick="runTrack(' + Q + escHtml(trackId) + Q + ')">▶ Run</button></div>' +
+        '<button class="btn primary" data-run-id="' + escHtml(trackId) + '" onclick="runTrack(' + Q + escHtml(trackId) + Q + ')">▶ Run</button></div>' +
         '<div class="empty-state" style="height:auto;margin-top:40px">' +
         '<div>No workers yet</div>' +
         '<div style="font-size:12px;color:var(--muted)">Add tasks to todo.md and click Run</div></div>';
@@ -793,7 +812,7 @@ export function htmlDashboard(): string {
     content.innerHTML =
       '<div class="track-header">' +
         '<h2>' + escHtml(ts.track.name) + '</h2>' +
-        '<button class="btn primary" onclick="runTrack(' + Q + escHtml(trackId) + Q + ')">▶ Run</button>' +
+        '<button class="btn primary" data-run-id="' + escHtml(trackId) + '" onclick="runTrack(' + Q + escHtml(trackId) + Q + ')">▶ Run</button>' +
       '</div>' +
       '<div class="workers-grid">' + cards + '</div>';
   }
@@ -978,7 +997,23 @@ export function htmlDashboard(): string {
     setTimeout(function() { bar.style.display = 'none'; }, 6000);
   }
 
+  function showToast(msg) {
+    var t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.style.opacity = '1';
+    t.style.transform = 'translateY(0)';
+    setTimeout(function() {
+      t.style.opacity = '0';
+      t.style.transform = 'translateY(8px)';
+    }, 3500);
+  }
+
   window.runTrack = function(id) {
+    // Disable all Run buttons for this track while in flight
+    var btns = document.querySelectorAll('[data-run-id="' + id + '"]');
+    btns.forEach(function(b) { b.disabled = true; b.textContent = '⏳ Running…'; });
+
     fetch('/api/tracks/' + id + '/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -986,8 +1021,20 @@ export function htmlDashboard(): string {
     })
     .then(function(r) {
       if (!r.ok) return r.json().then(function(d) { showError(d.error || 'Run failed (' + r.status + ')'); });
+      return r.json();
     })
-    .catch(function(err) { showError(err instanceof Error ? err.message : String(err)); });
+    .then(function(result) {
+      if (!result) return;
+      if (result.done === 0 && result.failed === 0 && result.skipped === 0) {
+        showToast('No pending tasks in "' + id + '"');
+      } else {
+        showToast('Run complete — ' + result.done + ' done, ' + result.failed + ' failed, ' + result.skipped + ' skipped');
+      }
+    })
+    .catch(function(err) { showError(err instanceof Error ? err.message : String(err)); })
+    .finally(function() {
+      btns.forEach(function(b) { b.disabled = false; b.textContent = '▶ Run'; });
+    });
   };
 
   window.retryWorker = function(trackId, workerId) {

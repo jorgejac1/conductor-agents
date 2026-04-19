@@ -115,6 +115,7 @@ conductor status auth
 | `conductor plan apply [--dry-run]` | Apply the generated plan draft to create tracks |
 | `conductor plan show` | Print the current plan draft |
 | `conductor report [track]` | Show cost report — tokens + estimated USD per track |
+| `conductor mcp` | Start MCP server (stdio) — control conductor from any Claude conversation |
 | `conductor telegram setup` | Configure Telegram bot token + chat ID |
 | `conductor telegram [start]` | Start Telegram bot (foreground) |
 | `conductor ui [--port=8080]` | Start web dashboard |
@@ -269,7 +270,7 @@ Edit this file freely. The next `conductor run` will pick it up.
 | v0.5 | `conductor plan "<goal>"` — LLM generates tracks + tasks automatically | Shipped |
 | v0.6 | Per-track cost tracking, `conductor report`, `/api/tracks/:id/cost`, SSE cost events | Shipped |
 | v0.7 | UI v2 — 4-tab layout: Tracks deck (kanban with eval badges), Workers, History, Settings | Shipped |
-| v0.8 | MCP server — `conductor mcp` over stdio; tools: list/run/retry/status/cost from any Claude conversation | Planned |
+| v0.8 | MCP server — `conductor mcp` over stdio; tools: list/run/retry/status/cost from any Claude conversation | Shipped |
 | v0.9 | Scheduling + webhooks — `conductor schedule add <track> "<cron>"`, `conductor webhook start` | Planned |
 | v1.0 | Stable API, full docs, Docker image, `conductor doctor` | Planned |
 
