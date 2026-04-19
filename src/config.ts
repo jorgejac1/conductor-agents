@@ -46,13 +46,3 @@ export function saveConfig(config: ConductorConfig, cwd = process.cwd()): void {
 	writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 	renameSync(tmp, p);
 }
-
-export function defaultConfig(): ConductorConfig {
-	return {
-		tracks: [],
-		defaults: {
-			concurrency: 3,
-			agentCmd: "claude",
-		},
-	};
-}

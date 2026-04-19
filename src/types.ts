@@ -12,6 +12,7 @@ export interface Track {
 	files: string[]; // glob patterns for owned files
 	agentCmd?: string; // override default agent
 	concurrency?: number; // override default concurrency
+	schedule?: string; // 5-field cron expression, e.g. "0 9 * * 1-5"
 }
 
 export interface ConductorConfig {

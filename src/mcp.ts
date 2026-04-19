@@ -10,10 +10,15 @@
  * Zero runtime dependencies — uses Node built-ins only.
  */
 
+import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
 import type { McpJsonRpcRequest, McpJsonRpcResponse, McpToolDefinition } from "evalgate";
+import { loadConfig, saveConfig } from "./config.js";
 import { getTrackCost, getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
 import { createTrack, listTracks } from "./track.js";
+
+const _require = createRequire(import.meta.url);
+const VERSION: string = (_require("../package.json") as { version: string }).version;
 
 // ---------------------------------------------------------------------------
 // Params helper type
@@ -113,6 +118,33 @@ const TOOLS: McpToolDefinition[] = [
 			required: ["track_id"],
 		},
 	},
+	{
+		name: "schedule_track",
+		description:
+			"Set a cron schedule on a track so it runs automatically. Uses 5-field cron syntax (minute hour day month weekday). Example: '0 9 * * 1-5' runs at 9am Mon–Fri.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				track_id: { type: "string", description: "The track id to schedule." },
+				cron_expr: {
+					type: "string",
+					description: '5-field cron expression, e.g. "0 9 * * 1-5".',
+				},
+			},
+			required: ["track_id", "cron_expr"],
+		},
+	},
+	{
+		name: "unschedule_track",
+		description: "Remove the cron schedule from a track.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				track_id: { type: "string", description: "The track id to unschedule." },
+			},
+			required: ["track_id"],
+		},
+	},
 ];
 
 // ---------------------------------------------------------------------------
@@ -172,6 +204,50 @@ async function handleGetCost(params: Params, cwd: string): Promise<unknown> {
 	return getTrackCost(trackId, cwd);
 }
 
+async function handleScheduleTrack(params: Params, cwd: string): Promise<unknown> {
+	const trackId = params.track_id as string | undefined;
+	const cronExpr = params.cron_expr as string | undefined;
+	if (!trackId) throw new Error("track_id is required");
+	if (!cronExpr) throw new Error("cron_expr is required");
+
+	const { parseCron, nextFireMs } = await import("evalgate");
+	let expr: ReturnType<typeof parseCron>;
+	try {
+		expr = parseCron(cronExpr);
+	} catch {
+		throw new Error(
+			`Invalid cron expression: "${cronExpr}". Expected 5-field cron: minute hour day month weekday`,
+		);
+	}
+
+	const config = loadConfig(cwd);
+	if (!config) throw new Error("No conductor config found");
+	const track = config.tracks.find((t) => t.id === trackId);
+	if (!track) throw new Error(`Track "${trackId}" not found`);
+
+	track.schedule = cronExpr;
+	saveConfig(config, cwd);
+
+	const ms = nextFireMs(expr);
+	const next = new Date(Date.now() + ms);
+	return { scheduled: true, trackId, cronExpr, nextFire: next.toISOString() };
+}
+
+async function handleUnscheduleTrack(params: Params, cwd: string): Promise<unknown> {
+	const trackId = params.track_id as string | undefined;
+	if (!trackId) throw new Error("track_id is required");
+
+	const config = loadConfig(cwd);
+	if (!config) throw new Error("No conductor config found");
+	const track = config.tracks.find((t) => t.id === trackId);
+	if (!track) throw new Error(`Track "${trackId}" not found`);
+
+	const hadSchedule = !!track.schedule;
+	delete track.schedule;
+	saveConfig(config, cwd);
+	return { unscheduled: true, trackId, hadSchedule };
+}
+
 // ---------------------------------------------------------------------------
 // JSON-RPC dispatch
 // ---------------------------------------------------------------------------
@@ -194,7 +270,7 @@ async function dispatch(req: McpJsonRpcRequest, cwd: string): Promise<void> {
 			id,
 			result: {
 				protocolVersion: "2024-11-05",
-				serverInfo: { name: "conductor", version: "0.8.0" },
+				serverInfo: { name: "conductor", version: VERSION },
 				capabilities: { tools: {} },
 			},
 		});
@@ -235,6 +311,12 @@ async function dispatch(req: McpJsonRpcRequest, cwd: string): Promise<void> {
 					break;
 				case "get_cost":
 					result = await handleGetCost(toolParams, cwd);
+					break;
+				case "schedule_track":
+					result = await handleScheduleTrack(toolParams, cwd);
+					break;
+				case "unschedule_track":
+					result = await handleUnscheduleTrack(toolParams, cwd);
 					break;
 				default:
 					sendError(id, -32601, `unknown tool: ${toolName}`);

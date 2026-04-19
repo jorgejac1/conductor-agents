@@ -116,8 +116,12 @@ export async function listTracks(cwd = process.cwd()): Promise<TrackStatus[]> {
 		if (swarmState) {
 			// Derive progress from worker outcomes — workers run in isolated worktrees
 			// and never modify the original todo.md, so markdown checkbox parsing is useless.
+			// Count both done and failed as "completed" so the progress bar advances
+			// as the run progresses rather than staying at 0 when tasks fail.
 			todoTotal = swarmState.workers.length;
-			todoDone = swarmState.workers.filter((w) => w.status === "done").length;
+			todoDone = swarmState.workers.filter(
+				(w) => w.status === "done" || w.status === "failed",
+			).length;
 			todoPending = todoTotal - todoDone;
 		} else if (existsSync(todoPath)) {
 			// No run yet — count unchecked tasks in todo.md as a pre-run estimate

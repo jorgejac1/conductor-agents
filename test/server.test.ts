@@ -262,4 +262,96 @@ describe("server", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("POST /api/tracks/:id/budget returns 400 when contractId is missing", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Budget Test", "budget test track", [], dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/tracks/budget-test/budget`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ tokens: 1000 }),
+			});
+			assert.strictEqual(res.status, 400);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /api/tracks/:id/budget returns 400 when tokens is missing", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Budget Test", "budget test track", [], dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/tracks/budget-test/budget`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ contractId: "contract-a" }),
+			});
+			assert.strictEqual(res.status, 400);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /api/tracks/:id/budget records token usage and returns record", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Budget Test", "budget test track", [], dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/tracks/budget-test/budget`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ contractId: "my-contract", tokens: 5000 }),
+			});
+			assert.strictEqual(res.status, 200);
+			const record = await res.json();
+			assert.ok(
+				record !== null && typeof record === "object",
+				"response should be a record object",
+			);
+
+			// Verify the usage was persisted by checking track list cost summary
+			const tracksRes = await fetch(`http://localhost:${handle.port}/api/tracks`);
+			assert.strictEqual(tracksRes.status, 200);
+			const tracks = (await tracksRes.json()) as {
+				track: { id: string };
+				cost?: { totalTokens: number };
+			}[];
+			const budgetTrack = tracks.find((t) => t.track.id === "budget-test");
+			assert.ok(budgetTrack?.cost, "cost should be present after reporting token usage");
+			assert.ok((budgetTrack.cost?.totalTokens ?? 0) > 0, "total tokens should be greater than 0");
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /api/tracks/:id/budget accepts optional workerId", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Budget Test", "budget test track", [], dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/tracks/budget-test/budget`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ contractId: "my-contract", tokens: 2000, workerId: "worker-abc" }),
+			});
+			assert.strictEqual(res.status, 200);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

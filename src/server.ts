@@ -14,7 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { SwarmState } from "evalgate";
-import { queryRuns, swarmEvents } from "evalgate";
+import { queryRuns, reportTokenUsage, swarmEvents } from "evalgate";
 import { loadConfig, trackTodoPath } from "./config.js";
 import { getTrackCost, getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
 import { listTracks } from "./track.js";
@@ -46,6 +46,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 				sseClients.delete(res);
 			}
 		}
+		// Refresh sidebar counts (todoDone/todoTotal) after each worker transition.
+		// Debounced so rapid state changes don't flood clients.
+		scheduleBroadcastTracks();
 	}
 
 	function broadcastTracks(tracks: TrackStatus[]): void {
@@ -57,6 +60,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 				sseClients.delete(res);
 			}
 		}
+	}
+
+	let _tracksBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+	function scheduleBroadcastTracks(): void {
+		if (_tracksBroadcastTimer) return;
+		_tracksBroadcastTimer = setTimeout(() => {
+			_tracksBroadcastTimer = null;
+			listTracks(cwd)
+				.then(broadcastTracks)
+				.catch(() => {
+					/* ignore */
+				});
+		}, 300);
 	}
 
 	swarmEvents.on("state", broadcastSwarm);
@@ -71,6 +87,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 				sseClients.delete(res);
 			}
 		}
+		// Re-broadcast tracks so the kanban cost footer and stat bar refresh.
+		scheduleBroadcastTracks();
 	}
 	swarmEvents.on("cost", broadcastCost);
 
@@ -307,6 +325,35 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			const runs = queryRuns(todoPath, { limit: 100 });
 			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
 			res.end(JSON.stringify(runs));
+			return;
+		}
+
+		const budgetId = trackIdFromUrl(url, "budget");
+		if (budgetId && method === "POST") {
+			const body = await readBody(req);
+			let parsed: { contractId?: string; tokens?: number; workerId?: string } = {};
+			try {
+				parsed = JSON.parse(body);
+			} catch {
+				/* use defaults */
+			}
+			if (!parsed.contractId || typeof parsed.tokens !== "number") {
+				res.writeHead(400, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: "contractId and tokens (number) are required" }));
+				return;
+			}
+			const todoPath = trackTodoPath(budgetId, cwd);
+			const budgetOpts: { workerId?: string } = {};
+			if (parsed.workerId) budgetOpts.workerId = parsed.workerId;
+			const record = reportTokenUsage(
+				todoPath,
+				parsed.contractId,
+				parsed.tokens,
+				undefined,
+				budgetOpts,
+			);
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify(record));
 			return;
 		}
 

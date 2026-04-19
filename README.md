@@ -9,7 +9,7 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v0.7.0](https://img.shields.io/badge/version-v0.7.0-brightgreen.svg)](#roadmap)
+[![v0.9.0](https://img.shields.io/badge/version-v0.9.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -116,6 +116,11 @@ conductor status auth
 | `conductor plan show` | Print the current plan draft |
 | `conductor report [track]` | Show cost report — tokens + estimated USD per track |
 | `conductor mcp` | Start MCP server (stdio) — control conductor from any Claude conversation |
+| `conductor schedule add <track> "<cron>"` | Add a cron schedule to a track |
+| `conductor schedule list` | Show all scheduled tracks with next fire time |
+| `conductor schedule rm <track>` | Remove schedule from a track |
+| `conductor schedule start` | Start the scheduling daemon (foreground) |
+| `conductor webhook start [--port=9000]` | Start webhook server — `POST /webhook/<trackId>` triggers a run |
 | `conductor telegram setup` | Configure Telegram bot token + chat ID |
 | `conductor telegram [start]` | Start Telegram bot (foreground) |
 | `conductor ui [--port=8080]` | Start web dashboard |
@@ -165,6 +170,10 @@ Tasks live in `.conductor/tracks/<name>/todo.md` and follow the
 The verifier command runs inside the worker's git worktree after the agent
 finishes. Exit 0 = merge. Anything else = fail (and retry if retries remain).
 
+Run outcomes are recorded in the track's history:
+- **PASS** — verifier exited 0 *and* the git merge committed the work back to main.
+- **FAIL** — verifier definitively exited non-zero. Workers that pass the verifier but fail at merge are not recorded — the work wasn't committed.
+
 Composite verifiers are supported:
 
 ```markdown
@@ -209,9 +218,46 @@ conductor ui
 # → http://localhost:8080
 ```
 
-The dashboard shows all tracks in a sidebar with progress bars, and workers
-in the main panel with status badges (pending / running / verifying / done / failed).
-Failed workers have a Retry button. All updates stream live via SSE — no page refresh needed.
+The dashboard has four tabs:
+
+- **Tracks** — Kanban view: one column per track, one card per worker. Cards show a single status badge (`FAILED`, `FAILED`) or an eval result pill (`PASS` / `FAIL`) once the verifier runs. A cost footer shows cumulative token spend per track.
+- **Workers** — flat list of all workers across all tracks with status, duration, and Retry/Logs buttons.
+- **History** — run log across all tracks: date, track, contract title, trigger source, duration, and result (`PASS`/`FAIL`). A `PASS` entry means the eval verifier passed *and* the git merge committed the work back to main. A `FAIL` entry means the eval verifier definitively failed. Workers that pass the verifier but fail at merge are not recorded — the work wasn't committed. Export to CSV is available.
+- **Settings** — live config view (concurrency, agentCmd, scheduled tracks).
+
+All updates stream live via SSE — no page refresh needed.
+
+---
+
+## REST API
+
+The web server (`conductor ui`) exposes a REST API used by the dashboard. You can call it directly:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/tracks` | List all tracks with progress and cost |
+| `GET` | `/api/tracks/:id/state` | Swarm state for a track |
+| `GET` | `/api/tracks/:id/cost` | Budget summary for a track |
+| `GET` | `/api/tracks/:id/history` | Run history (last 100 runs, newest first) |
+| `GET` | `/api/tracks/:id/logs/:workerId` | Worker session log |
+| `POST` | `/api/tracks/:id/run` | Trigger a run `{ concurrency?, agentCmd?, resume? }` |
+| `POST` | `/api/tracks/:id/retry` | Retry a worker `{ workerId }` |
+| `POST` | `/api/tracks/:id/budget` | Record token usage `{ contractId, tokens, workerId? }` |
+| `GET` | `/api/events` | SSE stream — emits `tracks`, `swarm`, `cost`, and `eval-result` events |
+| `GET` | `/api/config` | Current conductor config |
+| `GET` | `/api/version` | `{ conductor, evalgate }` version strings |
+
+### Budget endpoint
+
+Agent workers can self-report token usage without touching the CLI:
+
+```bash
+curl -X POST http://localhost:8080/api/tracks/auth/budget \
+  -H 'Content-Type: application/json' \
+  -d '{ "contractId": "add-jwt", "tokens": 12400, "workerId": "abc123" }'
+```
+
+This triggers a `cost` SSE event, which immediately updates the cost footer in the dashboard.
 
 ---
 
@@ -271,7 +317,7 @@ Edit this file freely. The next `conductor run` will pick it up.
 | v0.6 | Per-track cost tracking, `conductor report`, `/api/tracks/:id/cost`, SSE cost events | Shipped |
 | v0.7 | UI v2 — 4-tab layout: Tracks deck (kanban with eval badges), Workers, History, Settings | Shipped |
 | v0.8 | MCP server — `conductor mcp` over stdio; tools: list/run/retry/status/cost from any Claude conversation | Shipped |
-| v0.9 | Scheduling + webhooks — `conductor schedule add <track> "<cron>"`, `conductor webhook start` | Planned |
+| v0.9 | Scheduling + webhooks — `conductor schedule add/list/rm/start`, `conductor webhook start` | Shipped |
 | v1.0 | Stable API, full docs, Docker image, `conductor doctor` | Planned |
 
 ---

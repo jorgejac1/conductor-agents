@@ -4,7 +4,6 @@ import {
 	getBudgetSummary,
 	loadState,
 	parseTodo,
-	queryBudgetRecords,
 	retryWorker,
 	runSwarm,
 	swarmEvents,
@@ -86,12 +85,6 @@ export function getTrackCost(id: string, cwd = process.cwd()): ReturnType<typeof
 	const source = readFileSync(todoPath, "utf8");
 	const contracts = parseTodo(source);
 	return getBudgetSummary(todoPath, contracts);
-}
-
-export function getTrackTotalTokens(id: string, cwd = process.cwd()): number {
-	const todoPath = trackTodoPath(id, cwd);
-	const records = queryBudgetRecords(todoPath);
-	return records.reduce((sum, r) => sum + r.tokens, 0);
 }
 
 export { swarmEvents };

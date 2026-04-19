@@ -568,6 +568,7 @@ export function htmlDashboard(): string {
   let evalResults = {};   // { workerId: { passed, contractId, output } }
   let historyCache = [];  // RunRecord[] (all tracks merged, sorted by date)
   let settingsLoaded = false;
+  const runningTracks = new Set(); // track IDs with an active swarm
 
   // ── Utils ─────────────────────────────────────────────────────────────
   function escHtml(s) {
@@ -620,8 +621,19 @@ export function htmlDashboard(): string {
 
         if (msg.type === 'tracks') {
           tracks = msg.tracks;
+          const terminal = ['done', 'failed'];
           for (const ts of tracks) {
-            if (ts.swarmState) swarmStates[ts.track.id] = ts.swarmState;
+            if (ts.swarmState) {
+              swarmStates[ts.track.id] = ts.swarmState;
+              // Seed runningTracks from live swarm state so a page refresh
+              // correctly reflects in-progress runs without clicking Run again.
+              const ws = ts.swarmState.workers || [];
+              if (ws.length > 0 && ws.some(function(w) { return !terminal.includes(w.status); })) {
+                runningTracks.add(ts.track.id);
+              } else {
+                runningTracks.delete(ts.track.id);
+              }
+            }
           }
           renderKanban();
           renderWorkers();
@@ -632,7 +644,14 @@ export function htmlDashboard(): string {
             const parts = state.todoPath.split('/');
             const tracksIdx = parts.lastIndexOf('tracks');
             if (tracksIdx !== -1 && parts[tracksIdx + 1]) {
-              swarmStates[parts[tracksIdx + 1]] = state;
+              const trackId = parts[tracksIdx + 1];
+              swarmStates[trackId] = state;
+              // Clear running state when all workers reach a terminal status
+              const terminal = ['done', 'failed'];
+              if (state.workers && state.workers.length > 0 &&
+                  state.workers.every(function(w) { return terminal.includes(w.status); })) {
+                runningTracks.delete(trackId);
+              }
             }
           }
           const cur = activeTab();
@@ -651,7 +670,20 @@ export function htmlDashboard(): string {
           if (cur === 'tracks') renderKanban();
           if (cur === 'workers') renderWorkerCards(selectedId);
         } else if (msg.type === 'cost') {
-          // Cost events are aggregated from the TrackStatus.cost field on next tracks refresh
+          // Accumulate into the matching track's cost so stat bar updates immediately,
+          // before the next full tracks broadcast arrives.
+          if (msg.estimatedUsd) {
+            const ts = tracks.find(function(t) {
+              return t.swarmState && t.swarmState.workers &&
+                t.swarmState.workers.some(function(w) { return w.id === msg.workerId; });
+            });
+            if (ts) {
+              if (!ts.cost) ts.cost = { totalTokens: 0, estimatedUsd: 0 };
+              ts.cost.totalTokens += (msg.tokens && msg.tokens.input || 0) + (msg.tokens && msg.tokens.output || 0);
+              ts.cost.estimatedUsd += msg.estimatedUsd;
+            }
+          }
+          updateStats();
           document.getElementById('last-update').textContent =
             'updated ' + new Date().toLocaleTimeString();
         }
@@ -679,18 +711,23 @@ export function htmlDashboard(): string {
 
       const cards = workers.map(function(w) {
         const evalRes = evalResults[w.id];
-        const evalBadge = evalRes
-          ? '<span class="eval-badge ' + (evalRes.passed ? 'pass' : 'fail') + '">' + (evalRes.passed ? 'PASS' : 'FAIL') + '</span>'
-          : '';
-        const statusBadge = '<span class="badge ' + escHtml(w.status) + '">' + escHtml(w.status) + '</span>';
+        const evalFailed = evalRes && !evalRes.passed && w.status === 'failed';
+        const evalPassed = evalRes && evalRes.passed && w.status === 'done';
+        const showStatusPill = !evalFailed && !evalPassed;
+        const pill = evalPassed
+          ? '<span class="eval-badge pass">PASS</span>'
+          : evalFailed
+            ? '<span class="eval-badge fail">FAIL</span>'
+            : '<span class="badge ' + escHtml(w.status) + '">' + escHtml(w.status) + '</span>';
         return '<div class="kanban-card" id="kcard-' + escHtml(w.id) + '" onclick="toggleKanbanLog(' + Q + escHtml(ts.track.id) + Q + ',' + Q + escHtml(w.id) + Q + ')">' +
           '<div class="kanban-card-title">' + escHtml(w.contractTitle || w.contractId) + '</div>' +
-          '<div class="kanban-card-badges">' + statusBadge + evalBadge + '</div>' +
+          '<div class="kanban-card-badges">' + pill + '</div>' +
           '<div class="kanban-card-log" id="klog-' + escHtml(w.id) + '"></div>' +
           '</div>';
       });
 
-      const runBtn = '<button class="btn btn-sm" data-run-id="' + escHtml(ts.track.id) + '" onclick="event.stopPropagation();runTrack(' + Q + escHtml(ts.track.id) + Q + ')">▶ Run</button>';
+      const isRunning = runningTracks.has(ts.track.id);
+      const runBtn = '<button class="btn btn-sm" data-run-id="' + escHtml(ts.track.id) + '" onclick="event.stopPropagation();runTrack(' + Q + escHtml(ts.track.id) + Q + ')"' + (isRunning ? ' disabled' : '') + '>' + (isRunning ? '⏳ Running…' : '▶ Run') + '</button>';
 
       return '<div class="kanban-column">' +
         '<div class="kanban-col-header">' +
@@ -766,10 +803,14 @@ export function htmlDashboard(): string {
     const state = swarmStates[trackId];
     const workers = state ? state.workers : [];
 
+    const isRunning = runningTracks.has(trackId);
+    const runBtnAttrs = isRunning ? ' disabled' : '';
+    const runBtnLabel = isRunning ? '⏳ Running…' : '▶ Run';
+
     if (!workers.length) {
       content.innerHTML =
         '<div class="track-header"><h2>' + escHtml(ts.track.name) + '</h2>' +
-        '<button class="btn primary" data-run-id="' + escHtml(trackId) + '" onclick="runTrack(' + Q + escHtml(trackId) + Q + ')">▶ Run</button></div>' +
+        '<button class="btn primary" data-run-id="' + escHtml(trackId) + '" onclick="runTrack(' + Q + escHtml(trackId) + Q + ')"' + runBtnAttrs + '>' + runBtnLabel + '</button></div>' +
         '<div class="empty-state" style="height:auto;margin-top:40px">' +
         '<div>No workers yet</div>' +
         '<div style="font-size:12px;color:var(--muted)">Add tasks to todo.md and click Run</div></div>';
@@ -778,8 +819,22 @@ export function htmlDashboard(): string {
 
     const cards = workers.map(function(w) {
       const evalRes = evalResults[w.id];
-      const evalLine = evalRes
-        ? '<div class="worker-eval-result"><span class="eval-badge ' + (evalRes.passed ? 'pass' : 'fail') + '">' + (evalRes.passed ? 'PASS' : 'FAIL') + '</span></div>'
+      // Pill logic — always show exactly one pill:
+      //   done              → PASS (green eval badge, no status pill)
+      //   failed + eval failed → FAIL (red eval badge replaces status pill)
+      //   failed + no eval  → FAILED (status pill only — agent/spawn failed)
+      //   failed + eval passed → FAILED (status pill only — merge/other failure)
+      //   running/pending/… → status pill only
+      const evalFailed = evalRes && !evalRes.passed && w.status === 'failed';
+      const evalPassed = evalRes && evalRes.passed && w.status === 'done';
+      const showStatusPill = !evalFailed && !evalPassed;
+      const evalBadge = evalPassed
+        ? '<span class="eval-badge pass">PASS</span>'
+        : evalFailed
+          ? '<span class="eval-badge fail">FAIL</span>'
+          : '';
+      const statusPill = showStatusPill
+        ? '<span class="badge ' + escHtml(w.status) + '">' + escHtml(w.status) + '</span>'
         : '';
       const isActive = w.startedAt && ['spawning','running','verifying','merging'].includes(w.status);
       const elapsed = isActive
@@ -794,13 +849,14 @@ export function htmlDashboard(): string {
       return '<div class="worker-wrap">' +
         '<div class="worker-card ' + escHtml(w.status) + '">' +
           '<div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">' +
-            '<span class="badge ' + escHtml(w.status) + '">' + escHtml(w.status) + '</span>' +
+            statusPill +
+            evalBadge +
             '<div class="worker-info">' +
               '<div class="worker-title">' + spinner + escHtml(w.contractTitle || w.id) + '</div>' +
               '<div class="worker-meta">id: ' + escHtml(w.id.slice(0, 8)) + '…</div>' +
             '</div>' +
           '</div>' +
-          evalLine + elapsed +
+          elapsed +
           '<div style="margin-top:8px;display:flex;gap:6px">' + retryBtn + logsBtn + '</div>' +
         '</div>' +
         '<div id="log-' + escHtml(w.id) + '" style="display:none" class="log-panel">' +
@@ -812,7 +868,7 @@ export function htmlDashboard(): string {
     content.innerHTML =
       '<div class="track-header">' +
         '<h2>' + escHtml(ts.track.name) + '</h2>' +
-        '<button class="btn primary" data-run-id="' + escHtml(trackId) + '" onclick="runTrack(' + Q + escHtml(trackId) + Q + ')">▶ Run</button>' +
+        '<button class="btn primary" data-run-id="' + escHtml(trackId) + '" onclick="runTrack(' + Q + escHtml(trackId) + Q + ')"' + runBtnAttrs + '>' + runBtnLabel + '</button>' +
       '</div>' +
       '<div class="workers-grid">' + cards + '</div>';
   }
@@ -1010,9 +1066,11 @@ export function htmlDashboard(): string {
   }
 
   window.runTrack = function(id) {
-    // Disable all Run buttons for this track while in flight
-    var btns = document.querySelectorAll('[data-run-id="' + id + '"]');
-    btns.forEach(function(b) { b.disabled = true; b.textContent = '⏳ Running…'; });
+    runningTracks.add(id);
+    // Reflect running state immediately in all buttons for this track
+    document.querySelectorAll('[data-run-id="' + id + '"]').forEach(function(b) {
+      b.disabled = true; b.textContent = '⏳ Running…';
+    });
 
     fetch('/api/tracks/' + id + '/run', {
       method: 'POST',
@@ -1020,20 +1078,23 @@ export function htmlDashboard(): string {
       body: '{}'
     })
     .then(function(r) {
-      if (!r.ok) return r.json().then(function(d) { showError(d.error || 'Run failed (' + r.status + ')'); });
+      if (!r.ok) return r.json().then(function(d) {
+        runningTracks.delete(id);
+        showError(d.error || 'Run failed (' + r.status + ')');
+      });
       return r.json();
     })
     .then(function(result) {
       if (!result) return;
       if (result.done === 0 && result.failed === 0 && result.skipped === 0) {
+        runningTracks.delete(id);
         showToast('No pending tasks in "' + id + '"');
-      } else {
-        showToast('Run complete — ' + result.done + ' done, ' + result.failed + ' failed, ' + result.skipped + ' skipped');
       }
+      // Otherwise leave runningTracks — SSE will clear it when workers finish
     })
-    .catch(function(err) { showError(err instanceof Error ? err.message : String(err)); })
-    .finally(function() {
-      btns.forEach(function(b) { b.disabled = false; b.textContent = '▶ Run'; });
+    .catch(function(err) {
+      runningTracks.delete(id);
+      showError(err instanceof Error ? err.message : String(err));
     });
   };
 

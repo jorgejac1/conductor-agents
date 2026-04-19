@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import type { SwarmState } from "evalgate";
+import { saveState } from "evalgate";
 import { trackContextPath, trackTodoPath } from "../src/config.js";
 import { createTrack, deleteTrack, getTrack, initConductor, listTracks } from "../src/track.js";
 
@@ -147,6 +149,63 @@ describe("track", () => {
 			assert.ok(content.includes("Does stuff"));
 			assert.ok(content.includes("src/features/**"));
 			assert.ok(content.includes("src/utils/**"));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("listTracks counts failed workers as done in progress", async () => {
+		const dir = tmpDir();
+		try {
+			initConductor(dir);
+			createTrack("Prog Test", "progress", [], dir);
+			const todoPath = trackTodoPath("prog-test", dir);
+
+			// saveState needs the .evalgate/sessions directory to exist
+			mkdirSync(join(dir, ".evalgate", "sessions"), { recursive: true });
+
+			const state: SwarmState = {
+				id: "test-swarm",
+				ts: new Date().toISOString(),
+				todoPath,
+				workers: [
+					{
+						id: "w1",
+						contractId: "c1",
+						contractTitle: "C1",
+						worktreePath: "/tmp/w1",
+						branch: "b1",
+						status: "done",
+						logPath: "/tmp/w1.log",
+					},
+					{
+						id: "w2",
+						contractId: "c2",
+						contractTitle: "C2",
+						worktreePath: "/tmp/w2",
+						branch: "b2",
+						status: "failed",
+						logPath: "/tmp/w2.log",
+					},
+					{
+						id: "w3",
+						contractId: "c3",
+						contractTitle: "C3",
+						worktreePath: "/tmp/w3",
+						branch: "b3",
+						status: "pending",
+						logPath: "/tmp/w3.log",
+					},
+				],
+			};
+			saveState(todoPath, state);
+
+			const statuses = await listTracks(dir);
+			const progTrack = statuses.find((s) => s.track.id === "prog-test");
+			assert.ok(progTrack, "prog-test track should be in list");
+			assert.strictEqual(progTrack.todoDone, 2, "done + failed workers should both count as done");
+			assert.strictEqual(progTrack.todoPending, 1, "pending worker should count as pending");
+			assert.strictEqual(progTrack.todoTotal, 3, "total should equal all workers");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
