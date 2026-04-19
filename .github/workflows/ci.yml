@@ -25,6 +25,11 @@ jobs:
 
       - run: npm ci
 
+      - name: Configure git for tests
+        run: |
+          git config --global user.email "ci@conductor.test"
+          git config --global user.name "CI"
+
       - run: npm run build
 
       - run: npm run typecheck
