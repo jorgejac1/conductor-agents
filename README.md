@@ -9,7 +9,7 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v1.0.0](https://img.shields.io/badge/version-v1.0.0-brightgreen.svg)](#roadmap)
+[![v2.0.0](https://img.shields.io/badge/version-v2.0.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -219,12 +219,30 @@ conductor ui
 # → http://localhost:8080
 ```
 
-The dashboard has four tabs:
+The dashboard is a React app with the **Mission Control** design system — a blue-black interface built for staying on top of long-running agent runs without losing context.
 
-- **Tracks** — Kanban view: one column per track, one card per worker. Cards show a single status badge (`FAILED`, `FAILED`) or an eval result pill (`PASS` / `FAIL`) once the verifier runs. A cost footer shows cumulative token spend per track.
-- **Workers** — flat list of all workers across all tracks with status, duration, and Retry/Logs buttons.
-- **History** — run log across all tracks: date, track, contract title, trigger source, duration, and result (`PASS`/`FAIL`). A `PASS` entry means the eval verifier passed *and* the git merge committed the work back to main. A `FAIL` entry means the eval verifier definitively failed. Workers that pass the verifier but fail at merge are not recorded — the work wasn't committed. Export to CSV is available.
-- **Settings** — live config view (concurrency, agentCmd, scheduled tracks).
+### Design
+
+- **Palette** — deep blue-black background (`#050810`), indigo accent (`#818cf8`), emerald for pass (`#34d399`), rose for fail (`#fb7185`), sky-blue for running (`#38bdf8`)
+- **Glassmorphic cards** — `backdrop-filter: blur` surfaces with inset highlights and blue-tinted borders
+- **Animated status dots** — running workers pulse continuously; pass/fail states glow in their respective colors
+- **Typography** — Inter for UI chrome, JetBrains Mono for data (IDs, costs, eval commands, logs)
+- **`[conductor]`** wordmark fixed top-left; the indigo-filled floating pill nav sits independently in the center
+
+### Tabs
+
+**Tracks** has two view modes, toggled via the toolbar:
+
+- **Kanban** — one column per track, one card per worker. Cards show a status dot, task title, and eval result badge (`PASS` / `FAIL`). The column footer shows cumulative token count and estimated USD spend for that track. Click any card to expand the full session log inline.
+- **Graph** — an orbital topology view. Tracks are arranged in a ring; their workers orbit outward in a 130° arc. Scroll to zoom (0.3×–3×), drag to pan, click a track node to open a slide-in detail panel with the full worker list, retry controls, and logs. Hover dims non-active tracks. Press Escape or click the background to deselect. View mode is remembered between sessions via localStorage.
+
+**Workers** — flat list of all workers across all tracks, with status, duration, eval badge, and Retry / Logs buttons.
+
+**History** — run log across all tracks: date, track, contract title, trigger source, duration, and result (`PASS`/`FAIL`). A `PASS` entry means the eval verifier passed *and* the git merge committed the work back to main. Export to CSV is available.
+
+**Activity** — per-track token spend chart. Shows cost accumulation over the session as a canvas bar chart.
+
+**Settings** — two-column layout: a live tracks table on the left (name, description, agent command, cost per track) and version / defaults / integrations / live session stats on the right. Session stats show total workers, done/failed/running counts, total tokens, and total estimated USD — updated live from SSE.
 
 All updates stream live via SSE — no page refresh needed.
 
@@ -247,6 +265,7 @@ The web server (`conductor ui`) exposes a REST API used by the dashboard. You ca
 | `GET` | `/api/events` | SSE stream — emits `tracks`, `swarm`, `cost`, and `eval-result` events |
 | `GET` | `/api/config` | Current conductor config |
 | `GET` | `/api/version` | `{ conductor, evalgate }` version strings |
+| `GET` | `/api/telegram-status` | `{ configured: boolean }` |
 
 ### Budget endpoint
 
@@ -330,7 +349,7 @@ Git worktrees
   ✔  no stale worktrees detected
 
 Dependencies
-  ✔  evalgate 1.0.0 installed (required: ^1.0.0)
+  ✔  evalgate 2.0.0 installed (required: ^2.0.0)
   ✔  agent "claude" found on PATH
 
 All checks passed.
@@ -435,7 +454,8 @@ The image is based on `node:22-slim` with `git` installed (required for worktree
 | v0.7 | UI v2 — 4-tab layout: Tracks deck (kanban with eval badges), Workers, History, Settings | Shipped |
 | v0.8 | MCP server — `conductor mcp` over stdio; tools: list/run/retry/status/cost from any Claude conversation | Shipped |
 | v0.9 | Scheduling + webhooks — `conductor schedule add/list/rm/start`, `conductor webhook start` | Shipped |
-| v1.0 | Stable API, programmatic API export, Docker image, `conductor doctor`, config validation. CONTEXT.md injection into every agent worker, `agentArgs` config field (per-track and global default) for non-Claude CLIs, `{task}` placeholder support, UI badge consistency fixes | Shipped |
+| v1.0 | Stable API, programmatic API export, Docker image, `conductor doctor`, CONTEXT.md injection, `agentArgs` config for non-Claude CLIs, `{task}` placeholder support | Shipped |
+| v2.0 | React dashboard rebuild — Mission Control design system, graph/topology view with zoom+pan, kanban token footers, wordmark, Settings redesign with live session stats, Activity tab, evalgate ^2.0.0 | Shipped |
 
 ---
 
