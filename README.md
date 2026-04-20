@@ -497,6 +497,9 @@ The image is based on `node:22-slim` with `git` installed (required for worktree
 | v1.0 | Stable API, programmatic API export, Docker image, `conductor doctor`, CONTEXT.md injection, `agentArgs` config for non-Claude CLIs, `{task}` placeholder support | Shipped |
 | v2.0 | React dashboard rebuild — Mission Control design system, graph/topology view with zoom+pan, kanban token footers, wordmark, Settings redesign with live session stats, Activity tab, evalgate ^2.0.0 | Shipped |
 | v2.1 | Track dependencies (`--depends` flag, DAG `runAll`, cycle detection in `doctor`), live log streaming in detail panel (SSE), typed failure badges (`TIMEOUT` / `MERGE` / `FAILED` / `ERROR`), dependency edges in graph view, keyboard shortcuts (`r`, `↑↓`, `?`), `worker-start` / `worker-retry` SSE events | Shipped |
+| v2.2 | Budget guardrails — per-track `maxTokens` / `maxUsd` in `config.json`; breach pauses new workers and fires Telegram alert. Mobile-responsive layout. Activity tab drill-down tooltips | Planned |
+| v2.3 | `conductor report --html` — self-contained HTML export (graph snapshot, worker timeline, cost table). `conductor plan` diff mode — shows diff against current tracks before applying | Planned |
+| v3.0 | Workspace mode — multi-project dashboard aggregating multiple `.conductor/` dirs, remote workers via SSH/container | Planned |
 
 ---
 
