@@ -75,7 +75,25 @@ export function validateConfig(raw: unknown): ConductorConfig {
 			(!Array.isArray(t.agentArgs) || !t.agentArgs.every((a) => typeof a === "string"))
 		)
 			throw new Error(`config.tracks[${i}].agentArgs: must be an array of strings`);
+		if (
+			t.dependsOn !== undefined &&
+			(!Array.isArray(t.dependsOn) || !t.dependsOn.every((d) => typeof d === "string"))
+		)
+			throw new Error(`config.tracks[${i}].dependsOn: must be an array of strings`);
 	}
+
+	// Validate all dependsOn references point to existing track IDs
+	const rawTracks = obj.tracks as Array<Record<string, unknown>>;
+	const trackIds = new Set(rawTracks.map((t) => t.id as string));
+	rawTracks.forEach((t, i) => {
+		if (Array.isArray(t.dependsOn)) {
+			for (const dep of t.dependsOn as string[]) {
+				if (!trackIds.has(dep)) {
+					throw new Error(`config.tracks[${i}].dependsOn: references unknown track id "${dep}"`);
+				}
+			}
+		}
+	});
 
 	// defaults
 	if (typeof obj.defaults !== "object" || obj.defaults === null) {

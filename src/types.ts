@@ -14,6 +14,8 @@ export interface Track {
 	concurrency?: number; // override default concurrency
 	schedule?: string; // 5-field cron expression, e.g. "0 9 * * 1-5"
 	agentArgs?: string[]; // e.g. ["--full-auto", "{task}"] for codex; {task} is replaced with context+title
+	/** IDs of tracks that must complete (all workers done) before this track runs. */
+	dependsOn?: string[];
 }
 
 export interface ConductorConfig {

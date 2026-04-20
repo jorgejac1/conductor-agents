@@ -418,6 +418,104 @@ describe("server", () => {
 		}
 	});
 
+	// ─── v2.1: streaming log endpoint ───────────────────────────────────────────
+
+	it("GET /api/tracks/:id/logs/:workerId/stream returns 404 when no swarm state", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Stream Test", "stream test", [], dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(
+				`http://localhost:${handle.port}/api/tracks/stream-test/logs/abc123/stream`,
+			);
+			assert.strictEqual(res.status, 404);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("GET /api/tracks/:id/logs/:workerId/stream returns SSE stream for terminal worker", async () => {
+		const dir = tmpDir(true);
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Stream Done", "stream done test", [], dir);
+			writeFileSync(trackTodoPath("stream-done", dir), "- [ ] Stream task\n  - eval: `true`\n");
+			// Run to completion so worker is in terminal state
+			await runTrack("stream-done", { agentCmd: "echo", concurrency: 1, cwd: dir });
+
+			handle = await startServer({ port: 0, cwd: dir });
+
+			// Get worker id from state
+			const stateRes = await fetch(`http://localhost:${handle.port}/api/tracks/stream-done/state`);
+			const state = (await stateRes.json()) as { workers: { id: string; status: string }[] };
+			assert.ok(state.workers.length > 0, "should have workers");
+			const workerId = state.workers[0].id;
+
+			// Request SSE stream — terminal workers should get immediate done event
+			const streamRes = await fetch(
+				`http://localhost:${handle.port}/api/tracks/stream-done/logs/${workerId}/stream`,
+			);
+			assert.strictEqual(streamRes.status, 200);
+			assert.ok(
+				streamRes.headers.get("content-type")?.startsWith("text/event-stream"),
+				"should return SSE content-type",
+			);
+
+			// Read until we see the done event
+			const reader = streamRes.body?.getReader();
+			assert.ok(reader);
+			const decoder = new TextDecoder();
+			let sseData = "";
+			for (let i = 0; i < 20; i++) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				sseData += decoder.decode(value);
+				if (sseData.includes("event: done")) break;
+			}
+			reader.cancel();
+			assert.ok(sseData.includes("event: done"), "terminal worker should emit done event");
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("runTrack worker has failureKind set when verifier fails", async () => {
+		const dir = tmpDir(true);
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("FailKind Test", "failurekind test", [], dir);
+			writeFileSync(
+				trackTodoPath("failkind-test", dir),
+				"- [ ] Failing task\n  - eval: `false`\n  - retries: 0\n",
+			);
+			await runTrack("failkind-test", { agentCmd: "echo", concurrency: 1, cwd: dir });
+
+			handle = await startServer({ port: 0, cwd: dir });
+			const stateRes = await fetch(
+				`http://localhost:${handle.port}/api/tracks/failkind-test/state`,
+			);
+			const state = (await stateRes.json()) as {
+				workers: Array<{ status: string; failureKind?: string }>;
+			};
+			const failed = state.workers.find((w) => w.status === "failed");
+			assert.ok(failed, "should have a failed worker");
+			assert.strictEqual(
+				failed.failureKind,
+				"verifier-fail",
+				"failureKind should be verifier-fail",
+			);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("POST /api/tracks/:id/run returns 404 for unknown track", async () => {
 		const dir = tmpDir();
 		let handle: ServerHandle | undefined;

@@ -36,6 +36,7 @@ export function createTrack(
 	description: string,
 	files: string[],
 	cwd = process.cwd(),
+	dependsOn?: string[],
 ): Track {
 	const id = slugify(name);
 	const config = loadConfig(cwd) ?? {
@@ -45,6 +46,16 @@ export function createTrack(
 
 	if (config.tracks.some((t) => t.id === id)) {
 		throw new Error(`Track "${id}" already exists`);
+	}
+
+	// Validate that all dependsOn IDs exist.
+	if (dependsOn && dependsOn.length > 0) {
+		const existingIds = new Set(config.tracks.map((t) => t.id));
+		for (const dep of dependsOn) {
+			if (!existingIds.has(dep)) {
+				throw new Error(`dependsOn: track "${dep}" does not exist`);
+			}
+		}
 	}
 
 	const dir = trackDir(id, cwd);
@@ -74,7 +85,13 @@ ${filesSection}
 	writeFileSync(trackContextPath(id, cwd), contextMd, "utf8");
 	writeFileSync(trackTodoPath(id, cwd), todoMd, "utf8");
 
-	const track: Track = { id, name, description, files };
+	const track: Track = {
+		id,
+		name,
+		description,
+		files,
+		...(dependsOn && dependsOn.length > 0 ? { dependsOn } : {}),
+	};
 	config.tracks.push(track);
 	saveConfig(config, cwd);
 

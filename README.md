@@ -9,7 +9,7 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v2.0.0](https://img.shields.io/badge/version-v2.0.0-brightgreen.svg)](#roadmap)
+[![v2.1.0](https://img.shields.io/badge/version-v2.1.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -90,7 +90,7 @@ conductor add auth --desc="Authentication layer" --files="src/auth/**"
 
 # 2. Run
 conductor run auth         # single track
-conductor run --all        # all tracks in parallel
+conductor run --all        # all tracks — DAG order, parallel where possible
 
 # 3. Check results
 conductor status auth
@@ -107,7 +107,7 @@ conductor status auth
 | `conductor rm <name>` | Remove a track |
 | `conductor list` | List all tracks with color-coded progress bars |
 | `conductor run <name> [opts]` | Run a track's worker swarm |
-| `conductor run --all` | Run all tracks sequentially |
+| `conductor run --all` | Run all tracks — respects `dependsOn` ordering, runs independent tracks in parallel |
 | `conductor retry <worker-id> <track>` | Retry a failed worker |
 | `conductor logs <worker-id> <track>` | Print a worker's session log |
 | `conductor status [name]` | Show worker states with duration and eval result |
@@ -132,6 +132,7 @@ conductor status auth
 ```
 --desc="description"                    Track description
 --files="src/auth/**,src/users/**"      Owned file globs (comma-separated)
+--depends="auth,payments"               Tracks this track depends on (comma-separated IDs)
 ```
 
 ### `conductor run` options
@@ -187,6 +188,33 @@ Composite verifiers are supported:
 
 ---
 
+## Track dependencies
+
+Tracks can declare `dependsOn` relationships. `conductor run --all` resolves them as a DAG — independent tracks run in parallel, dependent tracks wait for their prerequisites to pass before starting. If a prerequisite fails, all downstream tracks are skipped.
+
+```bash
+conductor add infra --desc="Infrastructure layer"
+conductor add api --desc="API layer" --depends="infra"
+conductor add frontend --desc="Frontend" --depends="api"
+```
+
+This creates the chain `infra → api → frontend`. Running `conductor run --all` will:
+1. Run `infra` first
+2. Run `api` only after `infra` passes
+3. Run `frontend` only after `api` passes
+
+`conductor doctor` catches cycles before you run:
+
+```
+✔  no circular track dependencies
+```
+
+```
+✘  cycle detected: api → frontend → infra → api
+```
+
+---
+
 ## AI planning (`conductor plan`)
 
 `conductor plan` uses an LLM agent to turn a natural-language goal into a
@@ -234,7 +262,14 @@ The dashboard is a React app with the **Mission Control** design system — a bl
 **Tracks** has two view modes, toggled via the toolbar:
 
 - **Kanban** — one column per track, one card per worker. Cards show a status dot, task title, and eval result badge (`PASS` / `FAIL`). The column footer shows cumulative token count and estimated USD spend for that track. Click any card to expand the full session log inline.
-- **Graph** — an orbital topology view. Tracks are arranged in a ring; their workers orbit outward in a 130° arc. Scroll to zoom (0.3×–3×), drag to pan, click a track node to open a slide-in detail panel with the full worker list, retry controls, and logs. Hover dims non-active tracks. Press Escape or click the background to deselect. View mode is remembered between sessions via localStorage.
+- **Graph** — an orbital topology view. Tracks are arranged in a ring; their workers orbit outward in a 130° arc. Tracks with `dependsOn` relationships are connected by dashed edges. Scroll to zoom (0.3×–3×), drag to pan, click a track node to open a slide-in detail panel with the full worker list, retry controls, and live-streaming logs. Hover dims non-active tracks. Press Escape or click the background to deselect. View mode is remembered between sessions via localStorage.
+
+  **Keyboard shortcuts** (graph view):
+  - `r` — run the selected track
+  - `↑` / `↓` — cycle focused worker in the detail panel
+  - `Esc` — deselect / close panel
+  - `?` — toggle shortcut help overlay
+  - `1`–`5` — switch tabs (global)
 
 **Workers** — flat list of all workers across all tracks, with status, duration, eval badge, and Retry / Logs buttons.
 
@@ -258,11 +293,12 @@ The web server (`conductor ui`) exposes a REST API used by the dashboard. You ca
 | `GET` | `/api/tracks/:id/state` | Swarm state for a track |
 | `GET` | `/api/tracks/:id/cost` | Budget summary for a track |
 | `GET` | `/api/tracks/:id/history` | Run history (last 100 runs, newest first) |
-| `GET` | `/api/tracks/:id/logs/:workerId` | Worker session log |
+| `GET` | `/api/tracks/:id/logs/:workerId` | Worker session log (complete, for terminal workers) |
+| `GET` | `/api/tracks/:id/logs/:workerId/stream` | SSE log stream — live tail while worker runs, emits `event: done` on completion |
 | `POST` | `/api/tracks/:id/run` | Trigger a run `{ concurrency?, agentCmd?, resume? }` |
 | `POST` | `/api/tracks/:id/retry` | Retry a worker `{ workerId }` |
 | `POST` | `/api/tracks/:id/budget` | Record token usage `{ contractId, tokens, workerId? }` |
-| `GET` | `/api/events` | SSE stream — emits `tracks`, `swarm`, `cost`, and `eval-result` events |
+| `GET` | `/api/events` | SSE stream — emits `tracks`, `swarm`, `cost`, `eval-result`, `worker-start`, and `worker-retry` events |
 | `GET` | `/api/config` | Current conductor config |
 | `GET` | `/api/version` | `{ conductor, evalgate }` version strings |
 | `GET` | `/api/telegram-status` | `{ configured: boolean }` |
@@ -339,17 +375,20 @@ Config
   ✔  config.json exists
   ✔  config.json schema is valid
 
-Tracks  (2 configured)
+Tracks  (3 configured)
   ✔  auth/todo.md exists
   ✔  auth: 3 task(s) with eval verifiers
   ✔  payments/todo.md exists
   ⚠  payments: 1 task(s) have no eval verifier: "Update Stripe keys"
+  ✔  notifications/todo.md exists
+  ✔  notifications: 2 task(s) with eval verifiers
+  ✔  no circular track dependencies
 
 Git worktrees
   ✔  no stale worktrees detected
 
 Dependencies
-  ✔  evalgate 2.0.0 installed (required: ^2.0.0)
+  ✔  evalgate 2.1.0 installed (required: ^2.1.0)
   ✔  agent "claude" found on PATH
 
 All checks passed.
@@ -359,10 +398,11 @@ Checks performed:
 1. `.conductor/config.json` exists and passes schema validation
 2. Each track has a `todo.md` file
 3. Each task has an `eval:` verifier (warns if missing)
-4. No stale git worktrees from previous crashed runs
-5. evalgate version satisfies the declared dependency range
-6. Agent commands (`claude`, or custom `agentCmd`) are on `$PATH`
-7. Any `schedule` cron expressions are valid
+4. No circular `dependsOn` references between tracks
+5. No stale git worktrees from previous crashed runs
+6. evalgate version satisfies the declared dependency range
+7. Agent commands (`claude`, or custom `agentCmd`) are on `$PATH`
+8. Any `schedule` cron expressions are valid
 
 ---
 
@@ -401,7 +441,7 @@ loadConfig, saveConfig, validateConfig, configDir, configPath, trackDir, trackTo
 // Tracks
 createTrack, deleteTrack, getTrack, listTracks, initConductor
 // Orchestration
-runTrack, runAll, retryTrackWorker, getTrackState, getTrackCost
+runTrack, runAll, retryTrackWorker, getTrackState, getTrackCost, detectCycle
 // Server
 startServer
 // MCP
@@ -456,6 +496,7 @@ The image is based on `node:22-slim` with `git` installed (required for worktree
 | v0.9 | Scheduling + webhooks — `conductor schedule add/list/rm/start`, `conductor webhook start` | Shipped |
 | v1.0 | Stable API, programmatic API export, Docker image, `conductor doctor`, CONTEXT.md injection, `agentArgs` config for non-Claude CLIs, `{task}` placeholder support | Shipped |
 | v2.0 | React dashboard rebuild — Mission Control design system, graph/topology view with zoom+pan, kanban token footers, wordmark, Settings redesign with live session stats, Activity tab, evalgate ^2.0.0 | Shipped |
+| v2.1 | Track dependencies (`--depends` flag, DAG `runAll`, cycle detection in `doctor`), live log streaming in detail panel (SSE), typed failure badges (`TIMEOUT` / `MERGE` / `FAILED` / `ERROR`), dependency edges in graph view, keyboard shortcuts (`r`, `↑↓`, `?`), `worker-start` / `worker-retry` SSE events | Shipped |
 
 ---
 

@@ -79,6 +79,86 @@ describe("config", () => {
 		assert.throws(() => validateConfig(cfg), /agentArgs: must be an array of strings/);
 	});
 
+	// ─── v2.1: dependsOn field ───────────────────────────────────────────────────
+
+	it("validateConfig accepts valid dependsOn array on a track", () => {
+		const cfg = {
+			tracks: [
+				{ id: "auth", name: "Auth", description: "", files: [] },
+				{ id: "payments", name: "Payments", description: "", files: [], dependsOn: ["auth"] },
+			],
+			defaults: { concurrency: 2, agentCmd: "claude" },
+		};
+		assert.doesNotThrow(() => validateConfig(cfg));
+	});
+
+	it("validateConfig rejects non-array dependsOn", () => {
+		const cfg = {
+			tracks: [
+				{ id: "auth", name: "Auth", description: "", files: [] },
+				{ id: "payments", name: "Payments", description: "", files: [], dependsOn: "auth" },
+			],
+			defaults: { concurrency: 2, agentCmd: "claude" },
+		};
+		assert.throws(() => validateConfig(cfg), /dependsOn: must be an array of strings/);
+	});
+
+	it("validateConfig rejects dependsOn with non-string elements", () => {
+		const cfg = {
+			tracks: [
+				{ id: "auth", name: "Auth", description: "", files: [] },
+				{ id: "payments", name: "Payments", description: "", files: [], dependsOn: [123] },
+			],
+			defaults: { concurrency: 2, agentCmd: "claude" },
+		};
+		assert.throws(() => validateConfig(cfg), /dependsOn: must be an array of strings/);
+	});
+
+	it("validateConfig rejects dependsOn referencing unknown track id", () => {
+		const cfg = {
+			tracks: [
+				{ id: "auth", name: "Auth", description: "", files: [] },
+				{
+					id: "payments",
+					name: "Payments",
+					description: "",
+					files: [],
+					dependsOn: ["nonexistent"],
+				},
+			],
+			defaults: { concurrency: 2, agentCmd: "claude" },
+		};
+		assert.throws(() => validateConfig(cfg), /references unknown track id/);
+	});
+
+	it("round-trips config with dependsOn through save + load", () => {
+		const dir = mkdtempSync(join(tmpdir(), "conductor-test-"));
+		try {
+			const config = {
+				tracks: [
+					{ id: "infra", name: "Infra", description: "", files: [] },
+					{ id: "app", name: "App", description: "", files: [], dependsOn: ["infra"] },
+					{
+						id: "tests",
+						name: "Tests",
+						description: "",
+						files: [],
+						dependsOn: ["app", "infra"],
+					},
+				],
+				defaults: { concurrency: 2, agentCmd: "claude" },
+			};
+			saveConfig(config, dir);
+			const loaded = loadConfig(dir);
+			const app = loaded?.tracks.find((t) => t.id === "app");
+			const tests = loaded?.tracks.find((t) => t.id === "tests");
+			assert.deepStrictEqual(app?.dependsOn, ["infra"]);
+			assert.deepStrictEqual(tests?.dependsOn, ["app", "infra"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("overwrites existing config on second save", () => {
 		const dir = mkdtempSync(join(tmpdir(), "conductor-test-"));
 		try {

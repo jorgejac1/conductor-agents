@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { trackContextPath, trackTodoPath } from "../src/config.js";
-import { getTrackState, retryTrackWorker, runTrack } from "../src/orchestrator.js";
+import { detectCycle, getTrackState, retryTrackWorker, runTrack } from "../src/orchestrator.js";
 import { createTrack, initConductor } from "../src/track.js";
 
 function tmpDir(initGit = false): string {
@@ -15,6 +15,61 @@ function tmpDir(initGit = false): string {
 	}
 	return dir;
 }
+
+describe("detectCycle", () => {
+	it("returns null for independent tracks", () => {
+		const tracks = [
+			{ id: "a", name: "A", description: "", files: [] },
+			{ id: "b", name: "B", description: "", files: [] },
+		];
+		assert.strictEqual(detectCycle(tracks), null);
+	});
+
+	it("returns null for linear dependency chain", () => {
+		const tracks = [
+			{ id: "a", name: "A", description: "", files: [] },
+			{ id: "b", name: "B", description: "", files: [], dependsOn: ["a"] },
+			{ id: "c", name: "C", description: "", files: [], dependsOn: ["b"] },
+		];
+		assert.strictEqual(detectCycle(tracks), null);
+	});
+
+	it("returns null for diamond dependency (shared ancestor)", () => {
+		const tracks = [
+			{ id: "a", name: "A", description: "", files: [] },
+			{ id: "b", name: "B", description: "", files: [], dependsOn: ["a"] },
+			{ id: "c", name: "C", description: "", files: [], dependsOn: ["a"] },
+			{ id: "d", name: "D", description: "", files: [], dependsOn: ["b", "c"] },
+		];
+		assert.strictEqual(detectCycle(tracks), null);
+	});
+
+	it("detects a 3-track cycle", () => {
+		const tracks = [
+			{ id: "a", name: "A", description: "", files: [], dependsOn: ["c"] },
+			{ id: "b", name: "B", description: "", files: [], dependsOn: ["a"] },
+			{ id: "c", name: "C", description: "", files: [], dependsOn: ["b"] },
+		];
+		const cycle = detectCycle(tracks);
+		assert.ok(cycle !== null, "should detect cycle");
+		assert.ok(Array.isArray(cycle) && cycle.length >= 2);
+	});
+
+	it("detects a self-cycle", () => {
+		const tracks = [{ id: "x", name: "X", description: "", files: [], dependsOn: ["x"] }];
+		const cycle = detectCycle(tracks);
+		assert.ok(cycle !== null, "should detect self-cycle");
+	});
+
+	it("detects a 2-track mutual cycle", () => {
+		const tracks = [
+			{ id: "a", name: "A", description: "", files: [], dependsOn: ["b"] },
+			{ id: "b", name: "B", description: "", files: [], dependsOn: ["a"] },
+		];
+		const cycle = detectCycle(tracks);
+		assert.ok(cycle !== null, "should detect mutual cycle");
+	});
+});
 
 describe("orchestrator", () => {
 	it("getTrackState returns null when no state exists", async () => {

@@ -105,6 +105,32 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 	}
 	swarmEvents.on("eval-result", broadcastEvalResult);
 
+	// Forward worker-start events (v2.1)
+	function broadcastWorkerStart(evt: unknown): void {
+		const data = `data: ${JSON.stringify({ type: "worker-start", ...(evt as object) })}\n\n`;
+		for (const res of sseClients) {
+			try {
+				res.write(data);
+			} catch {
+				sseClients.delete(res);
+			}
+		}
+	}
+	swarmEvents.on("worker-start", broadcastWorkerStart);
+
+	// Forward worker-retry events (v2.1)
+	function broadcastWorkerRetry(evt: unknown): void {
+		const data = `data: ${JSON.stringify({ type: "worker-retry", ...(evt as object) })}\n\n`;
+		for (const res of sseClients) {
+			try {
+				res.write(data);
+			} catch {
+				sseClients.delete(res);
+			}
+		}
+	}
+	swarmEvents.on("worker-retry", broadcastWorkerRetry);
+
 	function readBody(req: IncomingMessage): Promise<string> {
 		return new Promise((resolve, reject) => {
 			const chunks: Buffer[] = [];
@@ -114,17 +140,22 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		});
 	}
 
-	function parseLogsUrl(url: string): { trackId: string; workerId: string } | null {
-		// /api/tracks/:id/logs/:workerId
+	function parseLogsUrl(
+		url: string,
+	): { trackId: string; workerId: string; stream: boolean } | null {
+		// /api/tracks/:id/logs/:workerId          (one-shot)
+		// /api/tracks/:id/logs/:workerId/stream   (SSE stream)
 		const prefix = "/api/tracks/";
 		if (!url.startsWith(prefix)) return null;
 		const rest = url.slice(prefix.length);
 		const logsIdx = rest.indexOf("/logs/");
 		if (logsIdx === -1) return null;
 		const trackId = rest.slice(0, logsIdx);
-		const workerId = rest.slice(logsIdx + "/logs/".length);
+		let workerId = rest.slice(logsIdx + "/logs/".length);
+		const stream = workerId.endsWith("/stream");
+		if (stream) workerId = workerId.slice(0, -"/stream".length);
 		if (!trackId || !workerId) return null;
-		return { trackId, workerId };
+		return { trackId, workerId, stream };
 	}
 
 	function trackIdFromUrl(url: string, suffix: string): string | null {
@@ -255,7 +286,97 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 
 		const logsRoute = parseLogsUrl(url);
 		if (logsRoute && method === "GET") {
-			const { trackId, workerId } = logsRoute;
+			const { trackId, workerId, stream } = logsRoute;
+
+			if (stream) {
+				// SSE streaming log endpoint — tails the log file while the worker runs.
+				getTrackState(trackId, cwd)
+					.then((state) => {
+						if (!state) {
+							res.writeHead(404, { "Content-Type": "application/json" });
+							res.end(JSON.stringify({ error: `No state for track "${trackId}"` }));
+							return;
+						}
+						const worker = state.workers.find((w) => w.id.startsWith(workerId));
+						if (!worker) {
+							res.writeHead(404, { "Content-Type": "application/json" });
+							res.end(JSON.stringify({ error: `Worker "${workerId}" not found` }));
+							return;
+						}
+
+						res.writeHead(200, {
+							"Content-Type": "text/event-stream",
+							"Cache-Control": "no-cache",
+							Connection: "keep-alive",
+							"X-Accel-Buffering": "no",
+						});
+
+						// Send existing content immediately.
+						let offset = 0;
+						if (existsSync(worker.logPath)) {
+							const initial = readFileSync(worker.logPath, "utf8");
+							if (initial) {
+								res.write(`data: ${JSON.stringify(initial)}\n\n`);
+								offset = Buffer.byteLength(initial, "utf8");
+							}
+						}
+
+						// If worker is already in a terminal state, send done and close.
+						const isTerminal = worker.status === "done" || worker.status === "failed";
+						if (isTerminal) {
+							res.write("event: done\ndata: {}\n\n");
+							res.end();
+							return;
+						}
+
+						// Poll for new log content every 500ms (matches CLI follow-mode).
+						const pollInterval = setInterval(() => {
+							try {
+								if (!existsSync(worker.logPath)) return;
+								const full = readFileSync(worker.logPath);
+								if (full.length > offset) {
+									const chunk = full.subarray(offset).toString("utf8");
+									offset = full.length;
+									res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+								}
+							} catch {
+								/* log may not exist yet */
+							}
+						}, 500);
+
+						// Capture id for use in nested callback (TS can't narrow through closures).
+						const workerId_ = worker.id;
+
+						// Watch for worker reaching terminal state via swarmEvents.
+						function onWorkerEvent(w: { id: string; status: string }) {
+							if (w.id !== workerId_) return;
+							if (w.status === "done" || w.status === "failed") {
+								clearInterval(pollInterval);
+								swarmEvents.off("worker", onWorkerEvent);
+								try {
+									res.write("event: done\ndata: {}\n\n");
+									res.end();
+								} catch {
+									/* client already gone */
+								}
+							}
+						}
+						swarmEvents.on("worker", onWorkerEvent);
+
+						req.on("close", () => {
+							clearInterval(pollInterval);
+							swarmEvents.off("worker", onWorkerEvent);
+						});
+					})
+					.catch((err: unknown) => {
+						const message = err instanceof Error ? err.message : String(err);
+						res.writeHead(500, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: message }));
+					});
+				return;
+			}
+
+			// One-shot log fetch
 			getTrackState(trackId, cwd)
 				.then((state) => {
 					if (!state) {
@@ -401,6 +522,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			swarmEvents.off("state", broadcastSwarm);
 			swarmEvents.off("cost", broadcastCost);
 			swarmEvents.off("eval-result", broadcastEvalResult);
+			swarmEvents.off("worker-start", broadcastWorkerStart);
+			swarmEvents.off("worker-retry", broadcastWorkerRetry);
 			for (const res of sseClients) {
 				try {
 					res.end();

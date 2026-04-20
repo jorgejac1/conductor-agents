@@ -10,6 +10,7 @@ export interface Track {
 	concurrency?: number;
 	schedule?: string;
 	agentArgs?: string[];
+	dependsOn?: string[];
 }
 
 export interface TrackCostSummary {
@@ -36,6 +37,8 @@ export interface WorkerState {
 	logPath?: string;
 	verifierPassed?: boolean;
 	retries?: number;
+	/** Typed failure reason — set when status === "failed" (v2.1+). */
+	failureKind?: string;
 }
 
 export interface SwarmState {
@@ -107,7 +110,25 @@ export interface SSEEvalResultEvent {
 	output?: string;
 }
 
-export type SSEEvent = SSETracksEvent | SSESwarmEvent | SSECostEvent | SSEEvalResultEvent;
+export interface SSEWorkerStartEvent {
+	type: "worker-start";
+	workerId: string;
+	contractId: string;
+}
+
+export interface SSEWorkerRetryEvent {
+	type: "worker-retry";
+	workerId: string;
+	contractId: string;
+}
+
+export type SSEEvent =
+	| SSETracksEvent
+	| SSESwarmEvent
+	| SSECostEvent
+	| SSEEvalResultEvent
+	| SSEWorkerStartEvent
+	| SSEWorkerRetryEvent;
 
 // ─── Dashboard state ──────────────────────────────────────────────────────────
 

@@ -3,6 +3,7 @@ import type { SwarmOptions, SwarmResult, SwarmState } from "evalgate";
 import { getBudgetSummary, loadState, parseTodo, retryWorker, runSwarm } from "evalgate";
 import { loadConfig, trackContextPath, trackTodoPath } from "./config.js";
 import { getTrack } from "./track.js";
+import type { Track } from "./types.js";
 
 export interface RunTrackOpts {
 	concurrency?: number;
@@ -70,6 +71,46 @@ export async function getTrackState(id: string, cwd = process.cwd()): Promise<Sw
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Track dependency helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Detects a cycle in the track dependency graph using DFS.
+ * Returns the cycle path as an array of track IDs, or null if no cycle exists.
+ */
+export function detectCycle(tracks: Track[]): string[] | null {
+	const graph = new Map<string, string[]>();
+	for (const t of tracks) {
+		graph.set(t.id, t.dependsOn ?? []);
+	}
+
+	const visited = new Set<string>();
+	const stack = new Set<string>();
+	const path: string[] = [];
+
+	function dfs(id: string): boolean {
+		if (stack.has(id)) return true; // cycle detected
+		if (visited.has(id)) return false;
+		visited.add(id);
+		stack.add(id);
+		path.push(id);
+		for (const dep of graph.get(id) ?? []) {
+			if (dfs(dep)) return true;
+		}
+		path.pop();
+		stack.delete(id);
+		return false;
+	}
+
+	for (const t of tracks) {
+		if (!visited.has(t.id)) {
+			if (dfs(t.id)) return [...path];
+		}
+	}
+	return null;
+}
+
 export async function runAll(
 	opts: RunTrackOpts & { trackIds?: string[] } = {},
 ): Promise<Map<string, SwarmResult>> {
@@ -77,15 +118,99 @@ export async function runAll(
 	const config = loadConfig(cwd);
 	if (!config) throw new Error("No conductor config found. Run `conductor init` first.");
 
-	const ids = opts.trackIds ?? config.tracks.map((t) => t.id);
-	const results = new Map<string, SwarmResult>();
+	const allTracks = config.tracks;
+	const requestedIds = new Set(opts.trackIds ?? allTracks.map((t) => t.id));
+	const tracks = allTracks.filter((t) => requestedIds.has(t.id));
 
-	for (const id of ids) {
-		const result = await runTrack(id, opts);
-		results.set(id, result);
+	// Detect dependency cycles before starting any work.
+	const cycle = detectCycle(allTracks);
+	if (cycle) {
+		throw new Error(`Dependency cycle detected: ${cycle.join(" → ")}`);
+	}
+
+	const results = new Map<string, SwarmResult>();
+	// Tracks that were skipped because a dependency failed.
+	const skipped = new Set<string>();
+
+	// Build in-degree map (count of unsatisfied dependencies within the requested set).
+	const inDegree = new Map<string, number>();
+	const dependents = new Map<string, string[]>(); // dep → tracks that depend on it
+	for (const t of tracks) {
+		const deps = (t.dependsOn ?? []).filter((d) => requestedIds.has(d));
+		inDegree.set(t.id, deps.length);
+		for (const d of deps) {
+			const list = dependents.get(d) ?? [];
+			list.push(t.id);
+			dependents.set(d, list);
+		}
+	}
+
+	// Topological-order execution: run all ready tracks in parallel each wave.
+	const pending = new Set(tracks.map((t) => t.id));
+
+	while (pending.size > 0) {
+		// Ready = in pending set with in-degree 0, not skipped.
+		const ready = [...pending].filter((id) => inDegree.get(id) === 0 && !skipped.has(id));
+
+		if (ready.length === 0) {
+			// All remaining tracks are either blocked or skipped.
+			for (const id of pending) {
+				if (!skipped.has(id)) {
+					skipped.add(id);
+				}
+			}
+			break;
+		}
+
+		// Run the ready wave in parallel.
+		await Promise.allSettled(
+			ready.map(async (id) => {
+				pending.delete(id);
+				try {
+					const result = await runTrack(id, opts);
+					results.set(id, result);
+
+					// If this track had any failures, mark its dependents as skipped.
+					if (result.failed > 0) {
+						markSkipped(id, dependents, skipped, pending);
+					}
+				} catch (err) {
+					// runTrack itself threw — treat as a failure.
+					markSkipped(id, dependents, skipped, pending);
+					throw err;
+				}
+
+				// Decrement in-degree for dependents.
+				for (const dep of dependents.get(id) ?? []) {
+					inDegree.set(dep, (inDegree.get(dep) ?? 1) - 1);
+				}
+			}),
+		);
+	}
+
+	if (skipped.size > 0) {
+		process.stderr.write(
+			`conductor: ${skipped.size} track(s) skipped due to dependency failures: ${[...skipped].join(", ")}\n`,
+		);
 	}
 
 	return results;
+}
+
+/** Recursively marks a track and all its transitive dependents as skipped. */
+function markSkipped(
+	id: string,
+	dependents: Map<string, string[]>,
+	skipped: Set<string>,
+	pending: Set<string>,
+): void {
+	for (const dep of dependents.get(id) ?? []) {
+		if (!skipped.has(dep)) {
+			skipped.add(dep);
+			pending.delete(dep);
+			markSkipped(dep, dependents, skipped, pending);
+		}
+	}
 }
 
 export function getTrackCost(id: string, cwd = process.cwd()): ReturnType<typeof getBudgetSummary> {

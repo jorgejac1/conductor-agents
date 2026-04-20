@@ -26,7 +26,9 @@ type Action =
 	| { type: "TRACKS_UPDATE"; tracks: TrackStatus[] }
 	| { type: "SWARM_UPDATE"; state: SwarmState }
 	| { type: "EVAL_RESULT"; workerId: string; passed: boolean; output?: string }
-	| { type: "COST_EVENT"; event: CostEvent };
+	| { type: "COST_EVENT"; event: CostEvent }
+	| { type: "WORKER_START"; workerId: string; contractId: string }
+	| { type: "WORKER_RETRY"; workerId: string; contractId: string };
 
 function reducer(state: DashboardState, action: Action): DashboardState {
 	switch (action.type) {
@@ -62,6 +64,11 @@ function reducer(state: DashboardState, action: Action): DashboardState {
 				costHistory: [...state.costHistory, action.event],
 				lastUpdate: new Date(),
 			};
+		// worker-start / worker-retry: state is already updated via the swarm SSE event.
+		// These action types exist so callers can dispatch them without a type error.
+		case "WORKER_START":
+		case "WORKER_RETRY":
+			return { ...state, lastUpdate: new Date() };
 		default:
 			return state;
 	}
@@ -125,35 +132,54 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 	}, [refreshTracks]);
 
 	// SSE handler
-	const handleMessage = useCallback((event: SSEEvent) => {
-		switch (event.type) {
-			case "tracks":
-				dispatch({ type: "TRACKS_UPDATE", tracks: event.tracks });
-				break;
-			case "swarm":
-				dispatch({ type: "SWARM_UPDATE", state: event.state });
-				break;
-			case "eval-result":
-				dispatch({
-					type: "EVAL_RESULT",
-					workerId: event.workerId,
-					passed: event.passed,
-					output: event.output,
-				});
-				break;
-			case "cost":
-				dispatch({
-					type: "COST_EVENT",
-					event: {
-						trackId: event.trackId ?? "unknown",
-						tokens: event.tokens,
-						estimatedUsd: event.estimatedUsd ?? 0,
-						timestamp: Date.now(),
-					},
-				});
-				break;
-		}
-	}, []);
+	const handleMessage = useCallback(
+		(event: SSEEvent) => {
+			switch (event.type) {
+				case "tracks":
+					dispatch({ type: "TRACKS_UPDATE", tracks: event.tracks });
+					break;
+				case "swarm":
+					dispatch({ type: "SWARM_UPDATE", state: event.state });
+					break;
+				case "eval-result":
+					dispatch({
+						type: "EVAL_RESULT",
+						workerId: event.workerId,
+						passed: event.passed,
+						output: event.output,
+					});
+					break;
+				case "cost":
+					dispatch({
+						type: "COST_EVENT",
+						event: {
+							trackId: event.trackId ?? "unknown",
+							tokens: event.tokens,
+							estimatedUsd: event.estimatedUsd ?? 0,
+							timestamp: Date.now(),
+						},
+					});
+					break;
+				case "worker-start":
+					dispatch({
+						type: "WORKER_START",
+						workerId: event.workerId,
+						contractId: event.contractId,
+					});
+					showToast(`Worker started: ${event.workerId.slice(0, 8)}`);
+					break;
+				case "worker-retry":
+					dispatch({
+						type: "WORKER_RETRY",
+						workerId: event.workerId,
+						contractId: event.contractId,
+					});
+					showToast(`Worker retrying: ${event.workerId.slice(0, 8)}`);
+					break;
+			}
+		},
+		[showToast],
+	);
 
 	useSSE(handleMessage, setConnectionStatus);
 

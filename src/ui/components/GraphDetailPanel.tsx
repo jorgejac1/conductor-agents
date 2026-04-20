@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useDashboard } from "../context/DashboardContext.js";
-import { apiRetryWorker, fetchLog } from "../hooks/api.js";
+import { apiRetryWorker } from "../hooks/api.js";
+import { useLogStream } from "../hooks/useLogStream.js";
 import type { EvalResult, TrackStatus, WorkerState } from "../types.js";
 
 function statusColor(worker: WorkerState, evalResult?: EvalResult): string {
@@ -24,6 +25,21 @@ function statusLabel(worker: WorkerState, evalResult?: EvalResult): string {
 	}
 	if (worker.status === "failed") return "ERROR";
 	return worker.status.toUpperCase();
+}
+
+function failureKindBadge(kind: string | undefined): { label: string; cls: string } | null {
+	if (!kind) return null;
+	switch (kind) {
+		case "agent-timeout":
+		case "verifier-timeout":
+			return { label: "TIMEOUT", cls: "badge-timeout" };
+		case "merge-conflict":
+			return { label: "MERGE", cls: "badge-merge" };
+		case "verifier-fail":
+			return { label: "FAILED", cls: "badge-fail" };
+		default:
+			return { label: "ERROR", cls: "badge-error" };
+	}
 }
 
 function duration(worker: WorkerState): string {
@@ -50,27 +66,24 @@ function PanelWorkerRow({
 	onClick: () => void;
 }) {
 	const { showToast, showError, refreshTracks } = useDashboard();
-	const [log, setLog] = useState("");
-	const [loadingLog, setLoadingLog] = useState(false);
-	const [logOpen, setLogOpen] = useState(false);
+	const isRunning = ["spawning", "running", "verifying", "merging"].includes(worker.status);
+	// Auto-open log panel for running workers so output streams in real time.
+	const [logOpen, setLogOpen] = useState(isRunning);
+	const logPanelRef = useRef<HTMLDivElement>(null);
 
-	const toggleLog = useCallback(async () => {
-		if (logOpen) {
-			setLogOpen(false);
-			return;
+	const { log, isStreaming } = useLogStream(trackId, worker.id, isRunning);
+
+	// Auto-scroll to bottom when new content arrives while streaming.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: log triggers scroll on each new chunk
+	useEffect(() => {
+		if (isStreaming && logPanelRef.current) {
+			logPanelRef.current.scrollTop = logPanelRef.current.scrollHeight;
 		}
-		setLogOpen(true);
-		if (!log) {
-			setLoadingLog(true);
-			try {
-				setLog(await fetchLog(trackId, worker.id));
-			} catch {
-				setLog("(failed to load log)");
-			} finally {
-				setLoadingLog(false);
-			}
-		}
-	}, [logOpen, log, trackId, worker.id]);
+	}, [log, isStreaming]);
+
+	const toggleLog = useCallback(() => {
+		setLogOpen((prev) => !prev);
+	}, []);
 
 	async function handleRetry() {
 		try {
@@ -85,6 +98,7 @@ function PanelWorkerRow({
 	const color = statusColor(worker, evalResult);
 	const label = statusLabel(worker, evalResult);
 	const dur = duration(worker);
+	const fkBadge = worker.status === "failed" ? failureKindBadge(worker.failureKind) : null;
 
 	return (
 		<button
@@ -106,9 +120,13 @@ function PanelWorkerRow({
 					</div>
 				</div>
 				<div className="panel-worker-actions">
-					<span className="panel-worker-badge" style={{ color }}>
-						{label}
-					</span>
+					{fkBadge ? (
+						<span className={`panel-worker-badge ${fkBadge.cls}`}>{fkBadge.label}</span>
+					) : (
+						<span className="panel-worker-badge" style={{ color }}>
+							{label}
+						</span>
+					)}
 					{worker.status === "failed" && (
 						<button
 							type="button"
@@ -126,7 +144,7 @@ function PanelWorkerRow({
 						className="btn btn-sm"
 						onClick={(e) => {
 							e.stopPropagation();
-							void toggleLog();
+							toggleLog();
 						}}
 					>
 						{logOpen ? "Hide" : "Logs"}
@@ -134,7 +152,9 @@ function PanelWorkerRow({
 				</div>
 			</div>
 			{logOpen && (
-				<div className="worker-log-panel">{loadingLog ? "loading…" : log || "(empty log)"}</div>
+				<div className="worker-log-panel" ref={logPanelRef}>
+					{log || (isStreaming ? "waiting for output…" : "(empty log)")}
+				</div>
 			)}
 		</button>
 	);

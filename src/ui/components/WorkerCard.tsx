@@ -23,9 +23,17 @@ function statusBadge(worker: WorkerState, evalResult?: EvalResult): React.ReactN
 		return <span className="badge badge-done">DONE</span>;
 	}
 	if (worker.status === "failed") {
-		if (worker.verifierPassed === false)
-			return <span className="badge badge-fail-eval">FAILED</span>;
-		return <span className="badge badge-failed">ERROR</span>;
+		switch (worker.failureKind) {
+			case "agent-timeout":
+			case "verifier-timeout":
+				return <span className="badge badge-timeout">TIMEOUT</span>;
+			case "merge-conflict":
+				return <span className="badge badge-merge">MERGE</span>;
+			case "verifier-fail":
+				return <span className="badge badge-fail">FAILED</span>;
+			default:
+				return <span className="badge badge-error">ERROR</span>;
+		}
 	}
 	return <span className={`badge badge-${worker.status}`}>{worker.status.toUpperCase()}</span>;
 }

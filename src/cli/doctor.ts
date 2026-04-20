@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { parseCron, parseTodo } from "evalgate";
 import { configPath, loadConfig, trackTodoPath, validateConfig } from "../config.js";
+import { detectCycle } from "../orchestrator.js";
 import { c } from "./helpers.js";
 
 const PASS = `${c.green}✔${c.reset}`;
@@ -100,6 +101,15 @@ export async function cmdDoctor(args: string[]): Promise<number> {
 				failed++;
 			}
 		}
+	}
+
+	// ── 3b. Track dependency validation ─────────────────────────────────────────
+	const cycle = detectCycle(config.tracks);
+	if (cycle) {
+		check("no circular track dependencies", false, `cycle detected: ${cycle.join(" → ")}`);
+		failed++;
+	} else {
+		check("no circular track dependencies", true);
 	}
 
 	// ── 4. Stale git worktrees ───────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "../context/DashboardContext.js";
+import { apiRunTrack } from "../hooks/api.js";
 import type { EvalResult, TrackStatus, WorkerState } from "../types.js";
 import { GraphDetailPanel } from "./GraphDetailPanel.js";
 import { TrackNode } from "./TrackNode.js";
@@ -79,8 +80,8 @@ function computeLayout(
 const TRACK_R = 28;
 const WORKER_R = 7;
 
-export function GraphView() {
-	const { state } = useDashboard();
+export function GraphView({ onShowHelp }: { onShowHelp?: () => void }) {
+	const { state, showToast, showError } = useDashboard();
 	const { tracks, swarmStates, evalResults } = state;
 
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -197,7 +198,30 @@ export function GraphView() {
 			onMouseUp={onMouseUp}
 			onMouseLeave={onMouseUp}
 			onKeyDown={(e) => {
-				if (e.key === "Escape") handleBgClick();
+				if (e.key === "Escape") {
+					handleBgClick();
+				} else if (e.key === "r" && selectedTrackId) {
+					void (async () => {
+						try {
+							await apiRunTrack(selectedTrackId);
+							showToast("Track run started");
+						} catch (err) {
+							showError(err instanceof Error ? err.message : "Run failed");
+						}
+					})();
+				} else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && selectedTrack) {
+					const workers = selectedTrack.workers;
+					if (workers.length === 0) return;
+					const idx = workers.findIndex((w) => w.id === focusedWorkerId);
+					const next =
+						e.key === "ArrowDown"
+							? (idx + 1) % workers.length
+							: (idx - 1 + workers.length) % workers.length;
+					setFocusedWorkerId(workers[next]?.id ?? null);
+					e.preventDefault();
+				} else if (e.key === "?") {
+					onShowHelp?.();
+				}
 			}}
 			onClick={(e) => {
 				if (
@@ -221,6 +245,7 @@ export function GraphView() {
 			>
 				{/* SVG edges */}
 				<svg className="graph-svg" style={{ width: size.w, height: size.h }} aria-hidden="true">
+					{/* Worker-to-track edges */}
 					{workerLayouts.map(({ worker, trackId, pos }) => {
 						const tl = trackLayouts.find((t) => t.trackStatus.track.id === trackId);
 						if (!tl) return null;
@@ -236,6 +261,31 @@ export function GraphView() {
 								style={{ opacity: dimmed ? 0.05 : 0.6 }}
 							/>
 						);
+					})}
+					{/* Track dependency edges (dashed) */}
+					{trackLayouts.flatMap(({ trackStatus, pos: targetPos }) => {
+						const deps = trackStatus.track.dependsOn ?? [];
+						return deps.map((depId) => {
+							const sourceTl = trackLayouts.find((t) => t.trackStatus.track.id === depId);
+							if (!sourceTl) return null;
+							const dimmed =
+								activeTrackId !== null &&
+								activeTrackId !== trackStatus.track.id &&
+								activeTrackId !== depId;
+							return (
+								<line
+									key={`dep-${depId}-${trackStatus.track.id}`}
+									x1={sourceTl.pos.x}
+									y1={sourceTl.pos.y}
+									x2={targetPos.x}
+									y2={targetPos.y}
+									stroke="var(--muted)"
+									strokeWidth={1.5}
+									strokeDasharray="6 4"
+									opacity={dimmed ? 0.05 : 0.4}
+								/>
+							);
+						});
 					})}
 				</svg>
 
