@@ -16,6 +16,7 @@
  */
 
 import { cmdAdd } from "./cli/add.js";
+import { cmdDoctor } from "./cli/doctor.js";
 import { c, positionalArgs } from "./cli/helpers.js";
 import { cmdInit } from "./cli/init.js";
 import { cmdList } from "./cli/list.js";
@@ -63,6 +64,7 @@ Usage:
   conductor schedule start                    Start the scheduling daemon (foreground)
   conductor webhook start [--port=9000]       Start webhook server (POST /webhook/<track>)
   conductor mcp                               Start MCP server (stdio)
+  conductor doctor                            Health check config, tracks, and environment
   conductor help                              Show this help
 `);
 }
@@ -119,6 +121,9 @@ async function main(): Promise<void> {
 			break;
 		case "webhook":
 			exitCode = await cmdWebhook(args);
+			break;
+		case "doctor":
+			exitCode = await cmdDoctor(args);
 			break;
 		case "mcp": {
 			// startMcpServer runs indefinitely (readline keeps node alive).

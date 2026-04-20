@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { trackContextPath, trackTodoPath } from "../src/config.js";
-import { getTrackState, runTrack } from "../src/orchestrator.js";
+import { getTrackState, retryTrackWorker, runTrack } from "../src/orchestrator.js";
 import { createTrack, initConductor } from "../src/track.js";
 
 function tmpDir(initGit = false): string {
@@ -154,6 +154,46 @@ describe("orchestrator", () => {
 			assert.strictEqual(result.state.workers.length, 1);
 			const failed = result.state.workers.filter((w) => w.status === "failed").length;
 			assert.strictEqual(failed, 0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("retryTrackWorker throws when worker id not found", async () => {
+		const dir = tmpDir(true);
+		try {
+			initConductor(dir);
+			createTrack("Zeta", "Zeta feature", [], dir);
+			const todoPath = trackTodoPath("zeta", dir);
+			writeFileSync(todoPath, "- [ ] Zeta task\n  - eval: `true`\n");
+			await runTrack("zeta", { concurrency: 1, agentCmd: "echo", cwd: dir });
+			await assert.rejects(
+				() => retryTrackWorker("zeta", "nonexistent-worker-id", { cwd: dir }),
+				/not found/,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("retryTrackWorker retries a failed worker and resolves", async () => {
+		const dir = tmpDir(true);
+		try {
+			initConductor(dir);
+			createTrack("Eta", "Eta feature", [], dir);
+			const todoPath = trackTodoPath("eta", dir);
+
+			// First run — verifier fails
+			writeFileSync(todoPath, "- [ ] Eta task\n  - eval: `false`\n  - retries: 0\n");
+			const first = await runTrack("eta", { concurrency: 1, agentCmd: "echo", cwd: dir });
+			const failedWorker = first.state.workers.find((w) => w.status === "failed");
+			assert.ok(failedWorker, "should have a failed worker");
+
+			// Update verifier to pass, then retry
+			writeFileSync(todoPath, "- [ ] Eta task\n  - eval: `true`\n");
+			await assert.doesNotReject(() =>
+				retryTrackWorker("eta", failedWorker.id, { agentCmd: "echo", cwd: dir }),
+			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

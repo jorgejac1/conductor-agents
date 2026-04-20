@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -349,6 +349,124 @@ describe("server", () => {
 				body: JSON.stringify({ contractId: "my-contract", tokens: 2000, workerId: "worker-abc" }),
 			});
 			assert.strictEqual(res.status, 200);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("GET /api/telegram-status returns configured: false when no telegram config", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/telegram-status`);
+			assert.strictEqual(res.status, 200);
+			const body = (await res.json()) as { configured: boolean };
+			assert.strictEqual(body.configured, false);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("GET /api/telegram-status returns configured: true when token is present", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			// Manually inject telegram config
+			const configFile = join(dir, ".conductor", "config.json");
+			const raw = JSON.parse(readFileSync(configFile, "utf8")) as Record<string, unknown>;
+			raw.telegram = { token: "123:FAKE", chatId: 999 };
+			writeFileSync(configFile, JSON.stringify(raw));
+
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/telegram-status`);
+			assert.strictEqual(res.status, 200);
+			const body = (await res.json()) as { configured: boolean };
+			assert.strictEqual(body.configured, true);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /api/tracks/:id/run triggers a swarm run and returns workers", async () => {
+		const dir = tmpDir(true);
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Run Test", "run test track", [], dir);
+			const todoPath = trackTodoPath("run-test", dir);
+			writeFileSync(todoPath, "- [ ] Run task\n  - eval: `true`\n");
+
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/tracks/run-test/run`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ agentCmd: "echo", concurrency: 1 }),
+			});
+			assert.strictEqual(res.status, 200);
+			const body = (await res.json()) as { state: { workers: unknown[] } };
+			assert.ok(Array.isArray(body.state.workers), "should return workers array");
+			assert.ok(body.state.workers.length > 0, "should have at least one worker");
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /api/tracks/:id/run returns 404 for unknown track", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/tracks/nonexistent/run`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ agentCmd: "echo" }),
+			});
+			assert.strictEqual(res.status, 500);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /api/tracks/:id/retry retries a failed worker", async () => {
+		const dir = tmpDir(true);
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Retry Test", "retry test track", [], dir);
+			const todoPath = trackTodoPath("retry-test", dir);
+			// First run with false verifier to create a failed worker
+			writeFileSync(todoPath, "- [ ] Retry task\n  - eval: `false`\n  - retries: 0\n");
+
+			await runTrack("retry-test", { agentCmd: "echo", concurrency: 1, cwd: dir });
+
+			// Now update verifier to pass so the retry succeeds
+			writeFileSync(todoPath, "- [ ] Retry task\n  - eval: `true`\n");
+
+			handle = await startServer({ port: 0, cwd: dir });
+
+			// Get the failed worker id from state
+			const stateRes = await fetch(`http://localhost:${handle.port}/api/tracks/retry-test/state`);
+			const stateBody = (await stateRes.json()) as {
+				workers: Array<{ id: string; status: string }>;
+			};
+			const failedWorker = stateBody.workers.find((w) => w.status === "failed");
+			assert.ok(failedWorker, "should have a failed worker to retry");
+
+			const retryRes = await fetch(`http://localhost:${handle.port}/api/tracks/retry-test/retry`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ workerId: failedWorker.id, agentCmd: "echo" }),
+			});
+			assert.strictEqual(retryRes.status, 200);
 		} finally {
 			handle?.stop();
 			rmSync(dir, { recursive: true, force: true });

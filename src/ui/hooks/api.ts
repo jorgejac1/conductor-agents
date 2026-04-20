@@ -1,0 +1,53 @@
+import type { ConductorConfig, RunRecord, TrackStatus, VersionInfo } from "../types.js";
+
+async function json<T>(url: string, init?: RequestInit): Promise<T> {
+	const res = await fetch(url, init);
+	if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+	return res.json() as Promise<T>;
+}
+
+export async function fetchTracks(): Promise<TrackStatus[]> {
+	return json<TrackStatus[]>("/api/tracks");
+}
+
+export async function fetchHistory(trackId: string): Promise<RunRecord[]> {
+	const records = await json<RunRecord[]>(`/api/tracks/${trackId}/history`);
+	return records.map((r) => ({ ...r, trackId }));
+}
+
+export async function fetchConfig(): Promise<ConductorConfig> {
+	return json<ConductorConfig>("/api/config");
+}
+
+export async function fetchVersion(): Promise<VersionInfo> {
+	return json<VersionInfo>("/api/version");
+}
+
+export async function fetchTelegramStatus(): Promise<{ configured: boolean }> {
+	return json<{ configured: boolean }>("/api/telegram-status");
+}
+
+export async function fetchLog(trackId: string, workerId: string): Promise<string> {
+	const res = await fetch(`/api/tracks/${trackId}/logs/${workerId}`);
+	if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+	return res.text();
+}
+
+export async function apiRunTrack(
+	trackId: string,
+	opts: { concurrency?: number; agentCmd?: string; resume?: boolean } = {},
+): Promise<{ done: number; failed: number; skipped: number }> {
+	return json(`/api/tracks/${trackId}/run`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(opts),
+	});
+}
+
+export async function apiRetryWorker(trackId: string, workerId: string): Promise<{ ok: boolean }> {
+	return json(`/api/tracks/${trackId}/retry`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ workerId }),
+	});
+}

@@ -2,3 +2,4 @@ node_modules/
 dist/
 *.tsbuildinfo
 .conductor/
+src/ui-bundle.ts

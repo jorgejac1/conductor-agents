@@ -19,7 +19,7 @@ import { loadConfig, trackTodoPath } from "./config.js";
 import { getTrackCost, getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
 import { listTracks } from "./track.js";
 import type { TrackStatus } from "./types.js";
-import { htmlDashboard } from "./ui-html.js";
+import { htmlDashboard } from "./ui-bundle.js";
 
 export interface ServerOptions {
 	port?: number;

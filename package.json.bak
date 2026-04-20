@@ -1,6 +1,6 @@
 {
   "name": "conductor-agents",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "description": "Multi-agent orchestrator with eval-gated quality gates. Spawn parallel agent workers per track, verify output before merging.",
   "type": "module",
   "bin": {
@@ -14,17 +14,13 @@
     "LICENSE"
   ],
   "scripts": {
-    "build:ui": "node build-ui.mjs",
-    "build": "node build-ui.mjs && tsc",
+    "build": "tsc",
     "dev": "tsx src/cli.ts",
     "test": "node --test --import tsx test/*.test.ts",
     "prepare": "npm run build && npx simple-git-hooks",
     "lint": "biome check src/ test/",
     "lint:fix": "biome check --write src/ test/",
-    "typecheck": "tsc --noEmit",
-    "release:patch": "npm run lint && npm run typecheck && npm test && npm version patch && git push origin main --follow-tags",
-    "release:minor": "npm run lint && npm run typecheck && npm test && npm version minor && git push origin main --follow-tags",
-    "release:major": "npm run lint && npm run typecheck && npm test && npm version major && git push origin main --follow-tags"
+    "typecheck": "tsc --noEmit"
   },
   "simple-git-hooks": {
     "pre-commit": "npm run lint && npm run typecheck"
@@ -43,19 +39,14 @@
   "engines": {
     "node": ">=18"
   },
+  "dependencies": {
+    "evalgate": "^1.0.0"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
     "@types/node": "^22.0.0",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "esbuild": "^0.28.0",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
     "simple-git-hooks": "^2.13.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
-  },
-  "dependencies": {
-    "evalgate": "^2.0.0"
   }
 }
