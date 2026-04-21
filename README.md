@@ -9,7 +9,7 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v2.1.0](https://img.shields.io/badge/version-v2.1.0-brightgreen.svg)](#roadmap)
+[![v2.3.0](https://img.shields.io/badge/version-v2.3.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -112,9 +112,11 @@ conductor status auth
 | `conductor logs <worker-id> <track>` | Print a worker's session log |
 | `conductor status [name]` | Show worker states with duration and eval result |
 | `conductor plan "<goal>"` | Generate tracks + tasks from a natural-language goal |
-| `conductor plan apply [--dry-run]` | Apply the generated plan draft to create tracks |
+| `conductor plan diff` | Show diff of plan draft vs current tracks (added / removed / changed) |
+| `conductor plan apply [--dry-run] [--yes]` | Apply the generated plan draft — prompts for confirmation, `--yes` skips prompt |
 | `conductor plan show` | Print the current plan draft |
 | `conductor report [track]` | Show cost report — tokens + estimated USD per track |
+| `conductor report --html [path]` | Export self-contained HTML report (graph snapshot, worker timeline, cost table) |
 | `conductor mcp` | Start MCP server (stdio) — control conductor from any Claude conversation |
 | `conductor schedule add <track> "<cron>"` | Add a cron schedule to a track |
 | `conductor schedule list` | Show all scheduled tracks with next fire time |
@@ -227,14 +229,29 @@ track ownership, and writes `eval:`-gated tasks for each track.
 # Generate a plan (agent explores your codebase, writes .conductor/plan-draft.md)
 conductor plan "add JWT auth with middleware, login endpoint, and rate limiting"
 
-# Preview what would be created without applying
+# Show what would change vs current tracks — no filesystem writes
+conductor plan diff
+
+# Preview what would be created without applying (alias: --dry-run)
 conductor plan apply --dry-run
 
-# Apply — creates tracks with CONTEXT.md and todo.md
+# Apply interactively — prints the diff and prompts for confirmation
 conductor plan apply
+
+# Apply without the interactive prompt (useful in CI)
+conductor plan apply --yes
 
 # Run everything
 conductor run --all
+```
+
+`conductor plan diff` compares the generated `plan-draft.md` against the tracks currently in `config.json` and prints a colored diff:
+
+```
++ auth       (new track, 3 tasks)
++ payments   (new track, 2 tasks)
+~ frontend   (changed: +1 task, -0 tasks)
+  infra      (unchanged)
 ```
 
 The generated `todo.md` files are ready for `conductor run` — each task has a
@@ -263,7 +280,7 @@ The dashboard is a React app with the **Mission Control** design system — a bl
 
 **Tracks** has two view modes, toggled via the toolbar:
 
-- **Kanban** — one column per track, one card per worker. Cards show a status dot, task title, and eval result badge (`PASS` / `FAIL`). The column footer shows cumulative token count and estimated USD spend for that track. Click any card to expand the full session log inline.
+- **Kanban** — one column per track, one card per worker. Cards show a status dot, task title, and eval result badge (`PASS` / `FAIL`). The column footer shows cumulative token count and estimated USD spend for that track. Click any card to expand the full session log inline. A ⏸ Pause / ▶ Resume button appears in the column header whenever workers are running or the track is paused.
 - **Graph** — an orbital topology view. Tracks are arranged in a ring; their workers orbit outward in a 130° arc. Tracks with `dependsOn` relationships are connected by dashed edges. Scroll to zoom (0.3×–3×), drag to pan, click a track node to open a slide-in detail panel with the full worker list, retry controls, and live-streaming logs. Hover dims non-active tracks. Press Escape or click the background to deselect. View mode is remembered between sessions via localStorage.
 
   **Keyboard shortcuts** (graph view):
@@ -273,7 +290,7 @@ The dashboard is a React app with the **Mission Control** design system — a bl
   - `?` — toggle shortcut help overlay
   - `1`–`5` — switch tabs (global)
 
-**Workers** — flat list of all workers across all tracks, with status, duration, eval badge, and Retry / Logs buttons.
+**Workers** — flat list of all workers across all tracks, with status, duration, eval badge, and Retry / Logs buttons. A text search box filters by contract title or worker ID; five status pills (all / running / done / failed / pending) narrow the list further. Filter preference is persisted in localStorage.
 
 **History** — run log across all tracks: date, track, contract title, trigger source, duration, and result (`PASS`/`FAIL`). A `PASS` entry means the eval verifier passed *and* the git merge committed the work back to main. Export to CSV is available.
 
@@ -294,13 +311,15 @@ The web server (`conductor ui`) exposes a REST API used by the dashboard. You ca
 | `GET` | `/api/tracks` | List all tracks with progress and cost |
 | `GET` | `/api/tracks/:id/state` | Swarm state for a track |
 | `GET` | `/api/tracks/:id/cost` | Budget summary for a track |
-| `GET` | `/api/tracks/:id/history` | Run history (last 100 runs, newest first) |
+| `GET` | `/api/tracks/:id/history` | Run history — supports `?limit`, `?offset`, `?from` (ISO date), `?to` (ISO date), `?result=pass\|fail` |
 | `GET` | `/api/tracks/:id/logs/:workerId` | Worker session log (complete, for terminal workers) |
 | `GET` | `/api/tracks/:id/logs/:workerId/stream` | SSE log stream — live tail while worker runs, emits `event: done` on completion |
 | `POST` | `/api/tracks/:id/run` | Trigger a run `{ concurrency?, agentCmd?, resume? }` |
+| `POST` | `/api/tracks/:id/pause` | Pause a track — aborts new-worker spawning and writes a PAUSED marker |
+| `POST` | `/api/tracks/:id/resume` | Resume a paused track — clears the PAUSED marker and re-runs from pending state |
 | `POST` | `/api/tracks/:id/retry` | Retry a worker `{ workerId }` |
 | `POST` | `/api/tracks/:id/budget` | Record token usage `{ contractId, tokens, workerId? }` |
-| `GET` | `/api/events` | SSE stream — emits `tracks`, `swarm`, `cost`, `eval-result`, `worker-start`, and `worker-retry` events |
+| `GET` | `/api/events` | SSE stream — emits `tracks`, `swarm`, `cost`, `eval-result`, `worker-start`, `worker-retry`, `track-paused`, and `track-resumed` events |
 | `GET` | `/api/config` | Current conductor config |
 | `GET` | `/api/version` | `{ conductor, evalgate }` version strings |
 | `GET` | `/api/telegram-status` | `{ configured: boolean }` |
@@ -343,11 +362,21 @@ conductor add auth --desc="Auth layer" --max-usd=2 --max-tokens=500000
 
 When a track's cumulative spend exceeds either cap:
 
-- **New workers are paused** — the orchestrator will not spawn additional workers for that track until the budget is manually cleared or raised.
+- **New workers stop spawning** — the orchestrator aborts via `AbortSignal`; workers already in-flight run to completion, then no new workers start until the budget is cleared or raised.
+- **PAUSED marker written** — a `.conductor/tracks/<id>/PAUSED` file is written so the paused state survives process restarts and is visible via `GET /api/tracks/:id/paused`.
 - **Telegram alert fires** — if a Telegram bot is configured (`conductor telegram setup`), a message is sent immediately with the track name and the breach amount.
 - **`BUDGET` badge appears in the UI** — the track card in the Kanban view and the Settings tracks table both show a red `BUDGET` badge so the breach is immediately visible in the dashboard.
 
-Cost is calculated using the input/output token split when available (input: $3/MTok, output: $15/MTok). If only a total token count is reported (no split), a blended rate of $9/MTok is used.
+Cost is calculated using the input/output token split when available (input: $3/MTok, output: $15/MTok, via evalgate's `estimateUsd`). If only a total token count is reported (no split), a blended rate of $9/MTok is used.
+
+To resume a budget-paused track after reviewing or adjusting the cap:
+
+```bash
+# Via CLI (clears PAUSED marker + re-runs pending workers)
+curl -X POST http://localhost:8080/api/tracks/auth/resume
+
+# Or via the dashboard — click the green ▶ Resume button in the track column header
+```
 
 ---
 
@@ -475,7 +504,7 @@ loadConfig, saveConfig, validateConfig, configDir, configPath, trackDir, trackTo
 // Tracks
 createTrack, deleteTrack, getTrack, listTracks, initConductor
 // Orchestration
-runTrack, runAll, retryTrackWorker, getTrackState, getTrackCost, detectCycle
+runTrack, runAll, retryTrackWorker, getTrackState, getTrackCost, getTrackSpend, detectCycle, pauseTrack, resumeTrack, isPaused
 // Server
 startServer
 // MCP
@@ -532,7 +561,7 @@ The image is based on `node:22-slim` with `git` installed (required for worktree
 | v2.0 | React dashboard rebuild — Mission Control design system, graph/topology view with zoom+pan, kanban token footers, wordmark, Settings redesign with live session stats, Activity tab, evalgate ^2.0.0 | Shipped |
 | v2.1 | Track dependencies (`--depends` flag, DAG `runAll`, cycle detection in `doctor`), live log streaming in detail panel (SSE), typed failure badges (`TIMEOUT` / `MERGE` / `FAILED` / `ERROR`), dependency edges in graph view, keyboard shortcuts (`r`, `↑↓`, `?`), `worker-start` / `worker-retry` SSE events | Shipped |
 | v2.2 | Budget guardrails — per-track `maxTokens` / `maxUsd` in `config.json`; breach pauses new workers and fires Telegram alert. Mobile-responsive layout. Activity tab drill-down tooltips | Shipped |
-| v2.3 | `conductor report --html` — self-contained HTML export (graph snapshot, worker timeline, cost table). `conductor plan` diff mode — shows diff against current tracks before applying | Planned |
+| v2.3 | `conductor report --html` — self-contained HTML export (graph snapshot, worker timeline, cost table). `conductor plan diff` + `plan apply --yes` — diff mode shows added/removed/changed tracks before applying, `--yes` bypasses interactive prompt. Pause/Resume API (`POST /pause`, `POST /resume`) backed by `AbortSignal` in orchestrator — fixes budget-guardrail bug where new workers kept spawning after breach. History pagination (`?offset`, `?from`, `?to`, `?result`). MCP expanded to 12 tools (adds `get_logs`, `cancel_run`, `list_history`, `get_plan_diff`). Workers tab search + status filter pills. Kanban Pause/Resume button. | Shipped |
 | v3.0 | Workspace mode — multi-project dashboard aggregating multiple `.conductor/` dirs, remote workers via SSH/container | Planned |
 
 ---

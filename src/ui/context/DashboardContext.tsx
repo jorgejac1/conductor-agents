@@ -32,6 +32,8 @@ interface DashboardState {
 	activityLog: ActivityLogEntry[];
 	/** Tracks that have exceeded their budget limits (by trackId). */
 	budgetExceededTracks: Set<string>;
+	/** When true, new SSE events are not appended to activityLog. */
+	logPaused: boolean;
 	lastUpdate: Date | null;
 }
 
@@ -45,7 +47,10 @@ type Action =
 	| { type: "WORKER_START"; workerId: string; contractId: string }
 	| { type: "WORKER_RETRY"; workerId: string; contractId: string }
 	| { type: "BUDGET_EXCEEDED"; trackId: string }
-	| { type: "ACTIVITY_LOG"; entry: Omit<ActivityLogEntry, "index"> };
+	| { type: "ACTIVITY_LOG"; entry: Omit<ActivityLogEntry, "index"> }
+	| { type: "PAUSE_LOG" }
+	| { type: "RESUME_LOG" }
+	| { type: "CLEAR_LOG" };
 
 function reducer(state: DashboardState, action: Action): DashboardState {
 	switch (action.type) {
@@ -96,6 +101,7 @@ function reducer(state: DashboardState, action: Action): DashboardState {
 			return { ...state, budgetExceededTracks: next, lastUpdate: new Date() };
 		}
 		case "ACTIVITY_LOG": {
+			if (state.logPaused) return state;
 			const index = state.activityLog.length;
 			return {
 				...state,
@@ -103,6 +109,12 @@ function reducer(state: DashboardState, action: Action): DashboardState {
 				lastUpdate: new Date(),
 			};
 		}
+		case "PAUSE_LOG":
+			return { ...state, logPaused: true };
+		case "RESUME_LOG":
+			return { ...state, logPaused: false };
+		case "CLEAR_LOG":
+			return { ...state, activityLog: [], logPaused: false };
 		// worker-start / worker-retry: state is already updated via the swarm SSE event.
 		// These action types exist so callers can dispatch them without a type error.
 		case "WORKER_START":
@@ -120,6 +132,7 @@ const INITIAL_STATE: DashboardState = {
 	costHistory: [],
 	activityLog: [],
 	budgetExceededTracks: new Set(),
+	logPaused: false,
 	lastUpdate: null,
 };
 
@@ -138,6 +151,9 @@ interface DashboardContextValue {
 	showToast: (text: string, kind?: "success" | "error") => void;
 	showError: (text: string) => void;
 	refreshTracks: () => Promise<void>;
+	pauseLog: () => void;
+	resumeLog: () => void;
+	clearLog: () => void;
 }
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
@@ -166,6 +182,10 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 			showError(e instanceof Error ? e.message : "Failed to load tracks");
 		}
 	}, [showError]);
+
+	const pauseLog = useCallback(() => dispatch({ type: "PAUSE_LOG" }), []);
+	const resumeLog = useCallback(() => dispatch({ type: "RESUME_LOG" }), []);
+	const clearLog = useCallback(() => dispatch({ type: "CLEAR_LOG" }), []);
 
 	// Initial load
 	React.useEffect(() => {
@@ -242,7 +262,17 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
 	return (
 		<DashboardContext.Provider
-			value={{ state, connectionStatus, toast, showToast, showError, refreshTracks }}
+			value={{
+				state,
+				connectionStatus,
+				toast,
+				showToast,
+				showError,
+				refreshTracks,
+				pauseLog,
+				resumeLog,
+				clearLog,
+			}}
 		>
 			{children}
 		</DashboardContext.Provider>

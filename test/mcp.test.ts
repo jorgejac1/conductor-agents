@@ -122,7 +122,7 @@ describe("conductor MCP server", () => {
 			assert.ok(initRes.result, "expected init result");
 			assert.ok(listRes.result, "expected list result");
 			const r = listRes.result as { tools?: unknown[] };
-			assert.strictEqual(r.tools?.length, 8); // 6 original + schedule_track + unschedule_track
+			assert.strictEqual(r.tools?.length, 12); // 8 original + get_logs + cancel_run + list_history + get_plan_diff
 		} finally {
 			cleanup();
 		}

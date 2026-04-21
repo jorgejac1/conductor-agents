@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { loadConfig } from "./config.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -384,6 +385,53 @@ export function formatTasksAsTodo(tasks: PlanDraftTask[]): string {
 			return lines.join("\n");
 		})
 		.join("\n\n");
+}
+
+// ── Diff Plan ────────────────────────────────────────────────────────────────
+
+export interface PlanDiff {
+	added: string[];
+	removed: string[];
+	changed: Array<{
+		id: string;
+		taskDelta: { added: number; removed: number };
+		filesChanged: boolean;
+	}>;
+}
+
+/** Compare a plan draft against the current conductor config and return a structured diff. */
+export function diffPlan(cwd: string, draft: PlanDraft): PlanDiff {
+	const config = loadConfig(cwd);
+	const existing = new Map((config?.tracks ?? []).map((t) => [t.id, t]));
+	const incoming = new Map(draft.tracks.map((t) => [t.id, t]));
+
+	const added = draft.tracks.filter((t) => !existing.has(t.id)).map((t) => t.id);
+
+	const removed = (config?.tracks ?? []).filter((t) => !incoming.has(t.id)).map((t) => t.id);
+
+	const changed: PlanDiff["changed"] = [];
+	for (const draftTrack of draft.tracks) {
+		const curr = existing.get(draftTrack.id);
+		if (!curr) continue; // added — not changed
+		const existingTodo = existsSync(join(cwd, ".conductor", "tracks", draftTrack.id, "todo.md"))
+			? readFileSync(join(cwd, ".conductor", "tracks", draftTrack.id, "todo.md"), "utf8")
+			: "";
+		const existingTasks =
+			parsePlanDraft(
+				`# Conductor Plan: existing\nGenerated: x\n## Track: ${draftTrack.id}\nDescription: x\nFiles: x\nConcurrency: 1\n### Context\nx\n### Tasks\n${existingTodo}`,
+			).tracks[0]?.tasks ?? [];
+		const filesChanged = (curr.files ?? []).join(",") !== draftTrack.files.join(",");
+		const addedTasks = draftTrack.tasks.length - existingTasks.length;
+		if (filesChanged || addedTasks !== 0) {
+			changed.push({
+				id: draftTrack.id,
+				taskDelta: { added: Math.max(0, addedTasks), removed: Math.max(0, -addedTasks) },
+				filesChanged,
+			});
+		}
+	}
+
+	return { added, removed, changed };
 }
 
 // ── Apply Plan ────────────────────────────────────────────────────────────────

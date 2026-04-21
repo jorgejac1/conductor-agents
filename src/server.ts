@@ -13,11 +13,18 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { SwarmState } from "evalgate";
+import type { BudgetExceededEvent, SwarmState } from "evalgate";
 import { queryRuns, reportTokenUsage, swarmEvents } from "evalgate";
 import { loadConfig, trackTodoPath } from "./config.js";
-import type { BudgetExceededEvent } from "./orchestrator.js";
-import { getTrackCost, getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
+import {
+	getTrackCost,
+	getTrackState,
+	isPaused,
+	pauseTrack,
+	resumeTrack,
+	retryTrackWorker,
+	runTrack,
+} from "./orchestrator.js";
 import { listTracks } from "./track.js";
 import type { TrackStatus } from "./types.js";
 import { htmlDashboard } from "./ui-bundle.js";
@@ -132,9 +139,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 	}
 	swarmEvents.on("worker-retry", broadcastWorkerRetry);
 
-	// Forward budget-exceeded events (v2.2)
+	// Forward budget-exceeded events (v2.2/v2.3)
+	// Enrich with trackId derived from todoPath so UI clients keep working.
 	function broadcastBudgetExceeded(evt: BudgetExceededEvent): void {
-		const data = `data: ${JSON.stringify(evt)}\n\n`;
+		const pathParts = (evt.todoPath ?? "").split(/[\\/]/);
+		const tracksIdx = pathParts.lastIndexOf("tracks");
+		const trackId = tracksIdx >= 0 ? (pathParts[tracksIdx + 1] ?? "") : "";
+		const enriched = { ...evt, trackId };
+		const data = `data: ${JSON.stringify(enriched)}\n\n`;
 		for (const res of sseClients) {
 			try {
 				res.write(data);
@@ -146,6 +158,17 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		scheduleBroadcastTracks();
 	}
 	swarmEvents.on("budget-exceeded", broadcastBudgetExceeded);
+
+	function broadcastEvent(payload: Record<string, unknown>): void {
+		const data = `data: ${JSON.stringify(payload)}\n\n`;
+		for (const res of sseClients) {
+			try {
+				res.write(data);
+			} catch {
+				sseClients.delete(res);
+			}
+		}
+	}
 
 	function readBody(req: IncomingMessage): Promise<string> {
 		return new Promise((resolve, reject) => {
@@ -456,10 +479,64 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			return;
 		}
 
+		const pauseId = trackIdFromUrl(url, "pause");
+		if (pauseId && method === "POST") {
+			const paused = pauseTrack(pauseId, cwd);
+			broadcastEvent({ type: "track-paused", trackId: pauseId });
+			scheduleBroadcastTracks();
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ paused }));
+			return;
+		}
+
+		const resumeId = trackIdFromUrl(url, "resume");
+		if (resumeId && method === "POST") {
+			readBody(req)
+				.then((body) => {
+					let parsed: { concurrency?: number; agentCmd?: string } = {};
+					try {
+						parsed = JSON.parse(body) as typeof parsed;
+					} catch {
+						/* use defaults */
+					}
+					return resumeTrack(resumeId, { ...parsed, cwd });
+				})
+				.then((result) => {
+					broadcastEvent({ type: "track-resumed", trackId: resumeId });
+					scheduleBroadcastTracks();
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify(result));
+				})
+				.catch((err: unknown) => {
+					const message = err instanceof Error ? err.message : String(err);
+					res.writeHead(500, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: message }));
+				});
+			return;
+		}
+
+		const pausedId = trackIdFromUrl(url, "paused");
+		if (pausedId && method === "GET") {
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+			res.end(JSON.stringify({ paused: isPaused(pausedId, cwd) }));
+			return;
+		}
+
 		const historyId = trackIdFromUrl(url, "history");
 		if (historyId && method === "GET") {
 			const todoPath = trackTodoPath(historyId, cwd);
-			const runs = queryRuns(todoPath, { limit: 100 });
+			const qs = new URL(url, "http://x").searchParams;
+			const limit = Number(qs.get("limit") ?? "100") || 100;
+			const offset = Number(qs.get("offset") ?? "0") || 0;
+			const from = qs.get("from") ?? undefined;
+			const to = qs.get("to") ?? undefined;
+			const resultFilter = qs.get("result");
+			const queryOpts: Parameters<typeof queryRuns>[1] = { limit, offset };
+			if (from !== undefined) queryOpts.from = from;
+			if (to !== undefined) queryOpts.to = to;
+			if (resultFilter === "pass") queryOpts.passed = true;
+			if (resultFilter === "fail") queryOpts.passed = false;
+			const runs = queryRuns(todoPath, queryOpts);
 			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
 			res.end(JSON.stringify(runs));
 			return;

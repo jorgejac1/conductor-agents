@@ -1,14 +1,18 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { SwarmOptions, SwarmResult, SwarmState } from "evalgate";
 import {
+	estimateUsd,
 	getBudgetSummary,
 	loadState,
 	parseTodo,
 	queryBudgetRecords,
 	retryWorker,
 	runSwarm,
-	swarmEvents,
 } from "evalgate";
+
+export type { BudgetExceededEvent } from "evalgate";
+
 import { loadConfig, trackContextPath, trackTodoPath } from "./config.js";
 import { getTrack } from "./track.js";
 import type { Track } from "./types.js";
@@ -20,14 +24,55 @@ export interface RunTrackOpts {
 	cwd?: string;
 }
 
-/** Emitted on swarmEvents when a track's accumulated spend exceeds its budget. */
-export interface BudgetExceededEvent {
-	type: "budget-exceeded";
-	trackId: string;
-	totalTokens: number;
-	totalUsd: number;
-	maxTokens?: number;
-	maxUsd?: number;
+// Map of trackId → AbortController for in-flight runSwarm calls.
+// Allows pauseTrack to abort new-worker spawning without killing in-flight workers.
+const activeControllers = new Map<string, AbortController>();
+
+function pauseMarkerPath(id: string, cwd: string): string {
+	return join(cwd, ".conductor", "tracks", id, "PAUSED");
+}
+
+function writePauseMarker(
+	id: string,
+	cwd: string,
+	reason: { totalTokens: number; estimatedUsd: number },
+): void {
+	try {
+		writeFileSync(
+			pauseMarkerPath(id, cwd),
+			JSON.stringify({ ts: new Date().toISOString(), ...reason }),
+		);
+	} catch {
+		/* best-effort */
+	}
+}
+
+function clearPauseMarker(id: string, cwd: string): void {
+	try {
+		rmSync(pauseMarkerPath(id, cwd), { force: true });
+	} catch {
+		/* best-effort */
+	}
+}
+
+export function isPaused(id: string, cwd = process.cwd()): boolean {
+	return existsSync(pauseMarkerPath(id, cwd));
+}
+
+export function pauseTrack(id: string, cwd = process.cwd()): boolean {
+	const controller = activeControllers.get(id);
+	if (controller) {
+		controller.abort();
+	}
+	// Always write the marker so idle tracks can be pre-paused before their next run.
+	writePauseMarker(id, cwd, { totalTokens: 0, estimatedUsd: 0 });
+	return true;
+}
+
+export async function resumeTrack(id: string, opts: RunTrackOpts = {}): Promise<SwarmResult> {
+	const cwd = opts.cwd ?? process.cwd();
+	clearPauseMarker(id, cwd);
+	return runTrack(id, { ...opts, resume: true, cwd });
 }
 
 export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<SwarmResult> {
@@ -40,6 +85,32 @@ export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<Swa
 	const taskContext = existsSync(ctxPath) ? readFileSync(ctxPath, "utf8") : undefined;
 
 	const resolvedAgentArgs = track.agentArgs ?? config?.defaults.agentArgs;
+
+	const controller = new AbortController();
+	activeControllers.set(id, controller);
+
+	// Budget guardrail — wired via evalgate's onBudgetExceeded hook so the abort
+	// propagates inside runSwarm rather than just emitting an event after the fact.
+	const hasBudgetLimit = track.maxTokens !== undefined || track.maxUsd !== undefined;
+
+	function checkBudgetBeforeRun(): void {
+		if (!hasBudgetLimit) return;
+		const records = queryBudgetRecords(todoPath);
+		const totalInput = records.reduce((s, r) => s + (r.inputTokens ?? 0), 0);
+		const totalOutput = records.reduce((s, r) => s + (r.outputTokens ?? 0), 0);
+		const totalTokens = records.reduce((s, r) => s + r.tokens, 0);
+		const totalUsd = estimateUsd(totalInput, totalOutput);
+		const tokensExceeded = track.maxTokens !== undefined && totalTokens >= track.maxTokens;
+		const usdExceeded = track.maxUsd !== undefined && totalUsd >= track.maxUsd;
+		if (tokensExceeded || usdExceeded) {
+			controller.abort();
+			writePauseMarker(id, cwd, { totalTokens, estimatedUsd: totalUsd });
+		}
+	}
+
+	// Pre-run check in case we're already over budget from a prior run.
+	checkBudgetBeforeRun();
+
 	const swarmOpts: SwarmOptions = {
 		todoPath,
 		concurrency: opts.concurrency ?? track.concurrency ?? config?.defaults.concurrency ?? 3,
@@ -47,52 +118,28 @@ export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<Swa
 		...(resolvedAgentArgs !== undefined && { agentArgs: resolvedAgentArgs }),
 		...(taskContext !== undefined && { taskContext }),
 		resume: opts.resume ?? false,
+		signal: controller.signal,
+		...(hasBudgetLimit && {
+			onBudgetExceeded(_evt) {
+				const records = queryBudgetRecords(todoPath);
+				const totalTokens = records.reduce((s, r) => s + r.tokens, 0);
+				const totalInput = records.reduce((s, r) => s + (r.inputTokens ?? 0), 0);
+				const totalOutput = records.reduce((s, r) => s + (r.outputTokens ?? 0), 0);
+				const usd = estimateUsd(totalInput, totalOutput);
+				const tokensExceeded = track.maxTokens !== undefined && totalTokens >= track.maxTokens;
+				const usdExceeded = track.maxUsd !== undefined && usd >= track.maxUsd;
+				if (tokensExceeded || usdExceeded) {
+					controller.abort();
+					writePauseMarker(id, cwd, { totalTokens, estimatedUsd: usd });
+				}
+			},
+		}),
 	};
-
-	// Budget guardrail: check accumulated cost from previous runs before starting.
-	// Also listen during the run to emit budget-exceeded events when limits are crossed.
-	const hasBudgetLimit = track.maxTokens !== undefined || track.maxUsd !== undefined;
-	let budgetExceededEmitted = false;
-
-	function checkAndEmitBudget(): void {
-		if (!hasBudgetLimit || budgetExceededEmitted) return;
-		const records = queryBudgetRecords(todoPath);
-		const totalTokens = records.reduce((sum, r) => sum + r.tokens, 0);
-		// Blended Sonnet 4 estimate: $9/MTok
-		const totalUsd = (totalTokens * 9) / 1_000_000;
-		const tokensExceeded = track.maxTokens !== undefined && totalTokens >= track.maxTokens;
-		const usdExceeded = track.maxUsd !== undefined && totalUsd >= track.maxUsd;
-		if (tokensExceeded || usdExceeded) {
-			budgetExceededEmitted = true;
-			const evt: BudgetExceededEvent = {
-				type: "budget-exceeded",
-				trackId: id,
-				totalTokens,
-				totalUsd,
-				...(track.maxTokens !== undefined ? { maxTokens: track.maxTokens } : {}),
-				...(track.maxUsd !== undefined ? { maxUsd: track.maxUsd } : {}),
-			};
-			swarmEvents.emit("budget-exceeded", evt);
-		}
-	}
-
-	// Listen for cost events emitted during the swarm run.
-	function onCost(): void {
-		checkAndEmitBudget();
-	}
-
-	if (hasBudgetLimit) {
-		// Pre-run check in case we're already over budget from prior runs.
-		checkAndEmitBudget();
-		swarmEvents.on("cost", onCost);
-	}
 
 	try {
 		return await runSwarm(swarmOpts);
 	} finally {
-		if (hasBudgetLimit) {
-			swarmEvents.off("cost", onCost);
-		}
+		activeControllers.delete(id);
 	}
 }
 
@@ -281,4 +328,26 @@ export function getTrackCost(id: string, cwd = process.cwd()): ReturnType<typeof
 	const source = readFileSync(todoPath, "utf8");
 	const contracts = parseTodo(source);
 	return getBudgetSummary(todoPath, contracts);
+}
+
+/**
+ * Aggregate token spend for a track and return a { totalTokens, estimatedUsd } summary.
+ * Uses per-record input/output split when available for accurate Sonnet 4 pricing.
+ */
+export function getTrackSpend(
+	id: string,
+	cwd = process.cwd(),
+): { totalTokens: number; estimatedUsd: number } {
+	const todoPath = trackTodoPath(id, cwd);
+	if (!existsSync(todoPath)) return { totalTokens: 0, estimatedUsd: 0 };
+	const records = queryBudgetRecords(todoPath);
+	const totalTokens = records.reduce((s, r) => s + r.tokens, 0);
+	const totalInput = records.reduce((s, r) => s + (r.inputTokens ?? 0), 0);
+	const totalOutput = records.reduce((s, r) => s + (r.outputTokens ?? 0), 0);
+	// If split tokens are available, use them; otherwise use blended estimate (half/half).
+	const estimatedUsd =
+		totalInput + totalOutput > 0
+			? estimateUsd(totalInput, totalOutput)
+			: estimateUsd(totalTokens / 2, totalTokens / 2);
+	return { totalTokens, estimatedUsd };
 }

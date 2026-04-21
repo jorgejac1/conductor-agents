@@ -10,8 +10,26 @@ export async function fetchTracks(): Promise<TrackStatus[]> {
 	return json<TrackStatus[]>("/api/tracks");
 }
 
-export async function fetchHistory(trackId: string): Promise<RunRecord[]> {
-	const records = await json<RunRecord[]>(`/api/tracks/${trackId}/history`);
+export interface HistoryOptions {
+	limit?: number;
+	offset?: number;
+	from?: string;
+	to?: string;
+	result?: "pass" | "fail";
+}
+
+export async function fetchHistory(
+	trackId: string,
+	opts: HistoryOptions = {},
+): Promise<RunRecord[]> {
+	const params = new URLSearchParams();
+	if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+	if (opts.offset !== undefined) params.set("offset", String(opts.offset));
+	if (opts.from) params.set("from", opts.from);
+	if (opts.to) params.set("to", opts.to);
+	if (opts.result) params.set("result", opts.result);
+	const qs = params.toString();
+	const records = await json<RunRecord[]>(`/api/tracks/${trackId}/history${qs ? `?${qs}` : ""}`);
 	return records.map((r) => ({ ...r, trackId }));
 }
 
@@ -50,4 +68,24 @@ export async function apiRetryWorker(trackId: string, workerId: string): Promise
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ workerId }),
 	});
+}
+
+export async function apiPauseTrack(trackId: string): Promise<{ paused: boolean }> {
+	return json(`/api/tracks/${trackId}/pause`, { method: "POST" });
+}
+
+export async function apiResumeTrack(
+	trackId: string,
+	opts: { concurrency?: number; agentCmd?: string } = {},
+): Promise<{ done: number; failed: number; skipped: number }> {
+	return json(`/api/tracks/${trackId}/resume`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(opts),
+	});
+}
+
+export async function fetchIsPaused(trackId: string): Promise<boolean> {
+	const r = await json<{ paused: boolean }>(`/api/tracks/${trackId}/paused`);
+	return r.paused;
 }

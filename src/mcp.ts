@@ -1,7 +1,7 @@
 /**
  * MCP server for conductor.
  *
- * Exposes 6 tools over stdio JSON-RPC 2.0 so conductor can be controlled
+ * Exposes 12 tools over stdio JSON-RPC 2.0 so conductor can be controlled
  * from any MCP-compatible client (Claude Desktop, Cursor, etc.).
  *
  * Protocol: each stdin line = one JSON-RPC request; responses written to stdout.
@@ -13,8 +13,16 @@
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
 import type { McpJsonRpcRequest, McpJsonRpcResponse, McpToolDefinition } from "evalgate";
-import { loadConfig, saveConfig } from "./config.js";
-import { getTrackCost, getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
+import { queryRuns } from "evalgate";
+import { loadConfig, saveConfig, trackTodoPath } from "./config.js";
+import {
+	getTrackCost,
+	getTrackState,
+	pauseTrack,
+	retryTrackWorker,
+	runTrack,
+} from "./orchestrator.js";
+import { diffPlan, parsePlanDraft } from "./planner.js";
 import { createTrack, listTracks } from "./track.js";
 
 const _require = createRequire(import.meta.url);
@@ -145,6 +153,60 @@ const TOOLS: McpToolDefinition[] = [
 			required: ["track_id"],
 		},
 	},
+	{
+		name: "get_logs",
+		description: "Retrieve the session log for a specific worker. Returns the last N lines.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				track_id: { type: "string", description: "The track id that owns the worker." },
+				worker_id: { type: "string", description: "The worker id (or unique prefix)." },
+				tail: {
+					type: "number",
+					description: "Number of lines to return from the end. Defaults to 100.",
+				},
+			},
+			required: ["track_id", "worker_id"],
+		},
+	},
+	{
+		name: "cancel_run",
+		description:
+			"Pause/cancel an in-flight track run — stops new workers from spawning. In-flight workers finish naturally.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				track_id: { type: "string", description: "The track id to cancel." },
+			},
+			required: ["track_id"],
+		},
+	},
+	{
+		name: "list_history",
+		description: "List the recent run history for a track — one entry per eval execution.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				track_id: { type: "string", description: "The track id." },
+				limit: { type: "number", description: "Max results. Defaults to 20." },
+			},
+			required: ["track_id"],
+		},
+	},
+	{
+		name: "get_plan_diff",
+		description:
+			"Show what a plan draft would add, remove, or change versus the current conductor config — without applying it.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				cwd: {
+					type: "string",
+					description: "Project directory. Defaults to current working directory.",
+				},
+			},
+		},
+	},
 ];
 
 // ---------------------------------------------------------------------------
@@ -233,6 +295,48 @@ async function handleScheduleTrack(params: Params, cwd: string): Promise<unknown
 	return { scheduled: true, trackId, cronExpr, nextFire: next.toISOString() };
 }
 
+async function handleGetLogs(params: Params, cwd: string): Promise<unknown> {
+	const trackId = params.track_id as string | undefined;
+	const workerId = params.worker_id as string | undefined;
+	if (!trackId) throw new Error("track_id is required");
+	if (!workerId) throw new Error("worker_id is required");
+	const state = await getTrackState(trackId, cwd);
+	if (!state) throw new Error(`No state for track "${trackId}"`);
+	const worker = state.workers.find((w) => w.id.startsWith(workerId));
+	if (!worker) throw new Error(`Worker "${workerId}" not found`);
+	const { existsSync: fe, readFileSync: rf } = await import("node:fs");
+	if (!fe(worker.logPath)) return { log: "(no output yet)" };
+	const raw = rf(worker.logPath, "utf8");
+	const tail = typeof params.tail === "number" ? params.tail : 100;
+	const lines = raw.split("\n");
+	return { log: lines.slice(-tail).join("\n"), totalLines: lines.length };
+}
+
+async function handleCancelRun(params: Params, cwd: string): Promise<unknown> {
+	const trackId = params.track_id as string | undefined;
+	if (!trackId) throw new Error("track_id is required");
+	const paused = pauseTrack(trackId, cwd);
+	return { cancelled: paused, trackId };
+}
+
+async function handleListHistory(params: Params, cwd: string): Promise<unknown> {
+	const trackId = params.track_id as string | undefined;
+	if (!trackId) throw new Error("track_id is required");
+	const limit = typeof params.limit === "number" ? params.limit : 20;
+	const todoPath = trackTodoPath(trackId, cwd);
+	return queryRuns(todoPath, { limit });
+}
+
+async function handleGetPlanDiff(params: Params, cwd: string): Promise<unknown> {
+	const effectiveCwd = typeof params.cwd === "string" ? params.cwd : cwd;
+	const { existsSync: fe, readFileSync: rf } = await import("node:fs");
+	const { join } = await import("node:path");
+	const draftPath = join(effectiveCwd, ".conductor", "plan-draft.md");
+	if (!fe(draftPath)) throw new Error('No plan draft found. Run: conductor plan "<goal>" first');
+	const draft = parsePlanDraft(rf(draftPath, "utf8"));
+	return diffPlan(effectiveCwd, draft);
+}
+
 async function handleUnscheduleTrack(params: Params, cwd: string): Promise<unknown> {
 	const trackId = params.track_id as string | undefined;
 	if (!trackId) throw new Error("track_id is required");
@@ -317,6 +421,18 @@ async function dispatch(req: McpJsonRpcRequest, cwd: string): Promise<void> {
 					break;
 				case "unschedule_track":
 					result = await handleUnscheduleTrack(toolParams, cwd);
+					break;
+				case "get_logs":
+					result = await handleGetLogs(toolParams, cwd);
+					break;
+				case "cancel_run":
+					result = await handleCancelRun(toolParams, cwd);
+					break;
+				case "list_history":
+					result = await handleListHistory(toolParams, cwd);
+					break;
+				case "get_plan_diff":
+					result = await handleGetPlanDiff(toolParams, cwd);
 					break;
 				default:
 					sendError(id, -32601, `unknown tool: ${toolName}`);

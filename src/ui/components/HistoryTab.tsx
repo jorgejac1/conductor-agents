@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useDashboard } from "../context/DashboardContext.js";
+import type { HistoryOptions } from "../hooks/api.js";
 import { fetchHistory } from "../hooks/api.js";
 import type { RunRecord } from "../types.js";
 
@@ -24,6 +25,9 @@ export function HistoryTab() {
 	const { state, showError } = useDashboard();
 	const { tracks } = state;
 	const [selectedTrack, setSelectedTrack] = useState<string>("all");
+	const [resultFilter, setResultFilter] = useState<"all" | "pass" | "fail">("all");
+	const [fromDate, setFromDate] = useState("");
+	const [toDate, setToDate] = useState("");
 	const [records, setRecords] = useState<RunRecord[]>([]);
 	const [loading, setLoading] = useState(true);
 
@@ -32,8 +36,12 @@ export function HistoryTab() {
 			setLoading(true);
 			try {
 				const ids = selectedTrack === "all" ? tracks.map((t) => t.track.id) : [selectedTrack];
+				const opts: HistoryOptions = { limit: 200 };
+				if (resultFilter !== "all") opts.result = resultFilter;
+				if (fromDate) opts.from = new Date(fromDate).toISOString();
+				if (toDate) opts.to = new Date(`${toDate}T23:59:59`).toISOString();
 
-				const results = await Promise.all(ids.map((id) => fetchHistory(id)));
+				const results = await Promise.all(ids.map((id) => fetchHistory(id, opts)));
 				const flat = results
 					.flat()
 					.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
@@ -46,7 +54,7 @@ export function HistoryTab() {
 			}
 		}
 		void load();
-	}, [selectedTrack, tracks, showError]);
+	}, [selectedTrack, resultFilter, fromDate, toDate, tracks, showError]);
 
 	function exportCsv() {
 		const header = "date,track,title,result,duration,trigger\n";
@@ -84,6 +92,32 @@ export function HistoryTab() {
 						</option>
 					))}
 				</select>
+				<div className="filter-pills">
+					{(["all", "pass", "fail"] as const).map((f) => (
+						<button
+							key={f}
+							type="button"
+							className={`filter-pill${resultFilter === f ? " active" : ""}`}
+							onClick={() => setResultFilter(f)}
+						>
+							{f.toUpperCase()}
+						</button>
+					))}
+				</div>
+				<input
+					type="date"
+					className="history-date"
+					title="From date"
+					value={fromDate}
+					onChange={(e) => setFromDate(e.target.value)}
+				/>
+				<input
+					type="date"
+					className="history-date"
+					title="To date"
+					value={toDate}
+					onChange={(e) => setToDate(e.target.value)}
+				/>
 				<button type="button" className="btn btn-sm" onClick={exportCsv}>
 					Export CSV
 				</button>

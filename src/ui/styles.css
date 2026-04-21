@@ -560,6 +560,24 @@ body {
 	text-transform: uppercase;
 }
 
+.kanban-pause-btn {
+	font-size: 9px;
+	padding: 2px 7px;
+	opacity: 0.75;
+	transition: opacity 120ms;
+}
+
+.kanban-pause-btn:hover {
+	opacity: 1;
+}
+
+.kanban-pause-btn-paused {
+	color: #34d399;
+	border-color: rgba(52, 211, 153, 0.4);
+	background: rgba(52, 211, 153, 0.08);
+	opacity: 1;
+}
+
 .kanban-col-meta {
 	display: flex;
 	align-items: center;
@@ -829,6 +847,72 @@ body {
 	color: var(--muted);
 }
 
+.workers-filters {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-bottom: 4px;
+}
+
+.workers-search {
+	font-family: var(--font-ui);
+	font-size: 12px;
+	color: var(--text);
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	padding: 5px 10px;
+	outline: none;
+	min-width: 160px;
+}
+
+.workers-search::placeholder {
+	color: var(--muted);
+}
+
+.workers-search:focus {
+	border-color: rgba(129, 140, 248, 0.5);
+}
+
+.filter-pills {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-wrap: wrap;
+}
+
+.filter-pill {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	font-weight: 500;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted);
+	background: transparent;
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-pill);
+	padding: 3px 10px;
+	cursor: pointer;
+	transition:
+		color 120ms,
+		border-color 120ms,
+		background 120ms;
+	appearance: none;
+	-webkit-appearance: none;
+}
+
+.filter-pill:hover {
+	color: var(--text);
+	border-color: var(--border);
+}
+
+.filter-pill.active {
+	color: var(--accent);
+	border-color: rgba(129, 140, 248, 0.5);
+	background: rgba(129, 140, 248, 0.08);
+}
+
 /* ─── History Tab ────────────────────────────────────── */
 .history-controls {
 	display: flex;
@@ -846,6 +930,23 @@ body {
 	border-radius: var(--radius-sm);
 	padding: 5px 10px;
 	cursor: pointer;
+}
+
+.history-date {
+	font-family: var(--font-ui);
+	font-size: 12px;
+	color: var(--text);
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	padding: 5px 10px;
+	cursor: pointer;
+	color-scheme: dark;
+}
+
+.history-date:focus {
+	outline: none;
+	border-color: rgba(129, 140, 248, 0.5);
 }
 
 .history-table-wrap {

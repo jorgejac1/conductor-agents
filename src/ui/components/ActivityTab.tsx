@@ -3,6 +3,17 @@ import type { ActivityLogEntry } from "../context/DashboardContext.js";
 import { useDashboard } from "../context/DashboardContext.js";
 import { SpendChart } from "./SpendChart.js";
 
+const EVENT_TYPES = [
+	"all",
+	"cost",
+	"eval-result",
+	"worker-start",
+	"worker-retry",
+	"budget-exceeded",
+	"swarm",
+] as const;
+type EventTypeFilter = (typeof EVENT_TYPES)[number];
+
 // A fixed set of colors for up to 10 tracks
 const TRACK_COLORS = [
 	"#818cf8",
@@ -73,9 +84,11 @@ function EventRow({ entry, expanded, onToggle }: EventRowProps) {
 }
 
 export function ActivityTab() {
-	const { state } = useDashboard();
-	const { tracks, costHistory, activityLog } = state;
+	const { state, pauseLog, resumeLog, clearLog } = useDashboard();
+	const { tracks, costHistory, activityLog, logPaused } = state;
 	const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+	const [eventTypeFilter, setEventTypeFilter] = useState<EventTypeFilter>("all");
+	const [searchQuery, setSearchQuery] = useState("");
 
 	function toggleRow(index: number): void {
 		setExpandedRows((prev) => {
@@ -129,8 +142,15 @@ export function ActivityTab() {
 
 	const chartMax = Math.max(...chartBars.map((b) => b.value), 0.0001);
 
-	// Show newest events first
-	const reversedLog = useMemo(() => [...activityLog].reverse(), [activityLog]);
+	// Show newest events first, applying event-type filter and search
+	const reversedLog = useMemo(() => {
+		const q = searchQuery.trim().toLowerCase();
+		return [...activityLog].reverse().filter((entry) => {
+			if (eventTypeFilter !== "all" && entry.type !== eventTypeFilter) return false;
+			if (q && !JSON.stringify(entry.payload).toLowerCase().includes(q)) return false;
+			return true;
+		});
+	}, [activityLog, eventTypeFilter, searchQuery]);
 
 	return (
 		<div className="activity-layout">
@@ -203,12 +223,59 @@ export function ActivityTab() {
 
 			{/* Event feed with expandable rows */}
 			<div className="activity-event-feed card">
-				<div className="activity-card-title" style={{ padding: "14px 16px 0" }}>
-					Event Feed
+				<div
+					style={{
+						display: "flex",
+						alignItems: "center",
+						gap: 8,
+						padding: "14px 16px 8px",
+						flexWrap: "wrap",
+					}}
+				>
+					<div className="activity-card-title" style={{ marginRight: "auto" }}>
+						Event Feed
+					</div>
+					<input
+						type="text"
+						placeholder="Search events…"
+						className="workers-search"
+						style={{ width: 160, fontSize: 11 }}
+						value={searchQuery}
+						onChange={(e) => setSearchQuery(e.target.value)}
+					/>
+					<button
+						type="button"
+						className="btn btn-sm"
+						onClick={logPaused ? resumeLog : pauseLog}
+						title={logPaused ? "Resume log" : "Pause log"}
+					>
+						{logPaused ? "▶ Resume" : "⏸ Pause"}
+					</button>
+					<button type="button" className="btn btn-sm" onClick={clearLog} title="Clear log">
+						✕ Clear
+					</button>
+				</div>
+				<div
+					className="filter-pills"
+					style={{ padding: "0 16px 8px", flexWrap: "wrap", display: "flex", gap: 4 }}
+				>
+					{EVENT_TYPES.map((t) => (
+						<button
+							key={t}
+							type="button"
+							className={`filter-pill${eventTypeFilter === t ? " active" : ""}`}
+							onClick={() => setEventTypeFilter(t)}
+							style={{ fontSize: 10 }}
+						>
+							{t}
+						</button>
+					))}
 				</div>
 				{reversedLog.length === 0 ? (
 					<div className="activity-empty" style={{ padding: "12px 16px 16px" }}>
-						No events yet. Start a track run to see live events here.
+						{activityLog.length === 0
+							? "No events yet. Start a track run to see live events here."
+							: "No events match the current filter."}
 					</div>
 				) : (
 					<div className="activity-event-list">

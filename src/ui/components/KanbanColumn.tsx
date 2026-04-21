@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDashboard } from "../context/DashboardContext.js";
-import { apiRunTrack } from "../hooks/api.js";
+import { apiPauseTrack, apiResumeTrack, apiRunTrack, fetchIsPaused } from "../hooks/api.js";
 import type { EvalResult, TrackStatus, WorkerState } from "../types.js";
 import { KanbanCard } from "./KanbanCard.js";
 
@@ -19,6 +19,8 @@ export function KanbanColumn({ trackStatus, workers, evalResults }: KanbanColumn
 		trackStatus.budgetExceeded === true || state.budgetExceededTracks.has(track.id);
 	const pct = todoTotal > 0 ? Math.round((todoDone / todoTotal) * 100) : 0;
 	const [submitting, setSubmitting] = useState(false);
+	const [paused, setPaused] = useState(false);
+	const [pauseSubmitting, setPauseSubmitting] = useState(false);
 
 	const isRunning = workers.some((w) => RUNNING_STATUSES.has(w.status));
 	const btnDisabled = isRunning || submitting;
@@ -29,6 +31,13 @@ export function KanbanColumn({ trackStatus, workers, evalResults }: KanbanColumn
 			: workers.length > 0
 				? "Run again"
 				: "Run";
+
+	// Sync paused state from server on mount and when track changes
+	useEffect(() => {
+		fetchIsPaused(track.id)
+			.then(setPaused)
+			.catch(() => {});
+	}, [track.id]);
 
 	async function handleRun() {
 		if (btnDisabled) return;
@@ -44,6 +53,33 @@ export function KanbanColumn({ trackStatus, workers, evalResults }: KanbanColumn
 		}
 	}
 
+	async function handlePause() {
+		setPauseSubmitting(true);
+		try {
+			await apiPauseTrack(track.id);
+			setPaused(true);
+			showToast(`Paused ${track.name}`);
+		} catch (e) {
+			showError(e instanceof Error ? e.message : "Pause failed");
+		} finally {
+			setPauseSubmitting(false);
+		}
+	}
+
+	async function handleResume() {
+		setPauseSubmitting(true);
+		try {
+			await apiResumeTrack(track.id);
+			setPaused(false);
+			showToast(`Resumed ${track.name}`);
+			await refreshTracks();
+		} catch (e) {
+			showError(e instanceof Error ? e.message : "Resume failed");
+		} finally {
+			setPauseSubmitting(false);
+		}
+	}
+
 	return (
 		<div className="kanban-col">
 			<div className="kanban-col-header">
@@ -53,6 +89,17 @@ export function KanbanColumn({ trackStatus, workers, evalResults }: KanbanColumn
 						<span className="badge badge-budget" title="Budget limit exceeded">
 							BUDGET
 						</span>
+					)}
+					{(isRunning || paused) && (
+						<button
+							type="button"
+							className={`btn btn-sm kanban-pause-btn${paused ? " kanban-pause-btn-paused" : ""}`}
+							onClick={paused ? handleResume : handlePause}
+							disabled={pauseSubmitting}
+							title={paused ? "Resume track" : "Pause track"}
+						>
+							{paused ? "▶ Resume" : "⏸ Pause"}
+						</button>
 					)}
 				</div>
 				<div className="kanban-col-meta">
