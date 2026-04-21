@@ -326,6 +326,10 @@ body {
 	background: rgba(251, 113, 133, 0.12);
 	color: var(--fail);
 }
+.badge-budget {
+	background: rgba(251, 113, 133, 0.15);
+	color: var(--fail);
+}
 
 /* ─── Status dot (animated for running) ─────────────── */
 .status-dot {
@@ -538,6 +542,13 @@ body {
 	background: rgba(12, 18, 32, 0.6);
 	border: 1px solid var(--border-subtle);
 	border-radius: var(--radius-md);
+}
+
+.kanban-col-title-wrap {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
 }
 
 .kanban-col-title {
@@ -997,6 +1008,86 @@ body {
 	width: 52px;
 	text-align: right;
 	flex-shrink: 0;
+}
+
+/* ─── Activity event feed ────────────────────────────── */
+.activity-layout {
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+}
+
+.activity-event-feed {
+	overflow: hidden;
+}
+
+.activity-event-list {
+	display: flex;
+	flex-direction: column;
+}
+
+.activity-event-row {
+	border-bottom: 1px solid var(--border-subtle);
+}
+
+.activity-event-row:last-child {
+	border-bottom: none;
+}
+
+.activity-event-row-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	padding: 9px 16px;
+	background: transparent;
+	border: none;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	transition: background 120ms;
+}
+
+.activity-event-row-header:hover {
+	background: rgba(255, 255, 255, 0.03);
+}
+
+.activity-event-time {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	color: var(--muted);
+	flex-shrink: 0;
+	min-width: 56px;
+}
+
+.activity-event-chevron {
+	margin-left: auto;
+	font-size: 9px;
+	color: var(--muted);
+	flex-shrink: 0;
+	transition: opacity 150ms;
+}
+
+.activity-event-row-header:hover .activity-event-chevron {
+	opacity: 1;
+	color: var(--muted-bright);
+}
+
+.activity-event-payload {
+	margin: 0 16px 12px;
+	padding: 10px 12px;
+	background: rgba(5, 8, 16, 0.8);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-sm);
+	font-family: var(--font-mono);
+	font-size: 10px;
+	color: var(--muted-bright);
+	overflow-x: auto;
+	white-space: pre;
+	line-height: 1.6;
+	max-height: 240px;
+	overflow-y: auto;
 }
 
 /* ─── Settings Tab ───────────────────────────────────── */
@@ -1681,6 +1772,126 @@ body {
 .panel-worker-badge.badge-error {
 	background: rgba(251, 113, 133, 0.12);
 	color: var(--fail);
+}
+
+/* ─── Mobile responsive layout ──────────────────────── */
+@media (max-width: 768px) {
+	/* Floating NavBar becomes a full-width top bar */
+	.navbar {
+		top: 0;
+		left: 0;
+		right: 0;
+		transform: none;
+		border-radius: 0;
+		border-left: none;
+		border-right: none;
+		border-top: none;
+		width: 100%;
+		justify-content: flex-start;
+		gap: 2px;
+		padding: 6px 8px;
+		overflow: hidden;
+	}
+
+	/* Tabs scroll horizontally; scrollbar hidden */
+	.navbar-tabs {
+		overflow-x: auto;
+		scrollbar-width: none;
+		-ms-overflow-style: none;
+		flex: 1;
+	}
+
+	.navbar-tabs::-webkit-scrollbar {
+		display: none;
+	}
+
+	.nav-tab {
+		padding: 5px 10px;
+		letter-spacing: 0.03em;
+		white-space: nowrap;
+	}
+
+	.wordmark {
+		display: none;
+	}
+
+	.app {
+		padding-top: 52px;
+	}
+
+	.tab-content {
+		padding: 12px;
+	}
+
+	/* Graph view hidden on mobile */
+	.tracks-view-wrap.graph-mode,
+	.tracks-toolbar .view-toggle-btn:last-child {
+		display: none;
+	}
+
+	/* Kanban stacks to single column */
+	.kanban {
+		flex-direction: column;
+		align-items: stretch;
+		overflow-x: visible;
+	}
+
+	.kanban-col {
+		width: 100%;
+		flex-shrink: unset;
+	}
+
+	/* Workers layout: sidebar becomes top strip, content full width */
+	.workers-layout {
+		flex-direction: column;
+		height: auto;
+	}
+
+	.workers-sidebar {
+		width: 100%;
+		flex-direction: row;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.sidebar-track {
+		width: auto;
+		flex: 1 1 auto;
+		min-width: 100px;
+	}
+
+	.workers-content {
+		overflow-y: visible;
+	}
+
+	/* Worker detail panels become full-width bottom sheets */
+	.graph-detail-panel {
+		position: fixed;
+		top: auto;
+		bottom: 40px;
+		left: 0;
+		right: 0;
+		width: 100%;
+		height: 60vh;
+		border-left: none;
+		border-top: 1px solid var(--border);
+		border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+	}
+
+	/* Settings: collapse two-column grid to single column */
+	.settings-grid {
+		grid-template-columns: 1fr;
+	}
+
+	/* Activity: single column */
+	.activity-grid {
+		grid-template-columns: 1fr;
+	}
+
+	/* History table: allow horizontal scroll */
+	.history-table-wrap {
+		overflow-x: auto;
+	}
 }
 
 /* ─── Shortcut help overlay ──────────────────────────── */

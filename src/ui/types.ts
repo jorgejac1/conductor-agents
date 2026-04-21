@@ -11,6 +11,10 @@ export interface Track {
 	schedule?: string;
 	agentArgs?: string[];
 	dependsOn?: string[];
+	/** Maximum token spend before pausing new workers for this track. */
+	maxTokens?: number;
+	/** Maximum estimated USD spend before pausing new workers for this track. */
+	maxUsd?: number;
 }
 
 export interface TrackCostSummary {
@@ -53,6 +57,7 @@ export interface TrackStatus {
 	todoDone: number;
 	swarmState: SwarmState | null;
 	cost?: TrackCostSummary;
+	budgetExceeded?: boolean;
 }
 
 export interface RunRecord {
@@ -122,13 +127,23 @@ export interface SSEWorkerRetryEvent {
 	contractId: string;
 }
 
+export interface SSEBudgetExceededEvent {
+	type: "budget-exceeded";
+	trackId: string;
+	totalTokens: number;
+	totalUsd: number;
+	maxTokens?: number;
+	maxUsd?: number;
+}
+
 export type SSEEvent =
 	| SSETracksEvent
 	| SSESwarmEvent
 	| SSECostEvent
 	| SSEEvalResultEvent
 	| SSEWorkerStartEvent
-	| SSEWorkerRetryEvent;
+	| SSEWorkerRetryEvent
+	| SSEBudgetExceededEvent;
 
 // ─── Dashboard state ──────────────────────────────────────────────────────────
 

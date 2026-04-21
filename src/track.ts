@@ -31,13 +31,31 @@ function parseTodoProgress(todoMd: string): { total: number; pending: number; do
 	return { total, pending: total - done, done };
 }
 
+export interface CreateTrackOpts {
+	dependsOn?: string[];
+	maxTokens?: number;
+	maxUsd?: number;
+}
+
 export function createTrack(
 	name: string,
 	description: string,
 	files: string[],
 	cwd = process.cwd(),
-	dependsOn?: string[],
+	dependsOnOrOpts?: string[] | CreateTrackOpts,
 ): Track {
+	// Support legacy positional dependsOn[] and new options object
+	let dependsOn: string[] | undefined;
+	let maxTokens: number | undefined;
+	let maxUsd: number | undefined;
+	if (Array.isArray(dependsOnOrOpts)) {
+		dependsOn = dependsOnOrOpts;
+	} else if (dependsOnOrOpts !== undefined) {
+		dependsOn = dependsOnOrOpts.dependsOn;
+		maxTokens = dependsOnOrOpts.maxTokens;
+		maxUsd = dependsOnOrOpts.maxUsd;
+	}
+
 	const id = slugify(name);
 	const config = loadConfig(cwd) ?? {
 		tracks: [],
@@ -91,6 +109,8 @@ ${filesSection}
 		description,
 		files,
 		...(dependsOn && dependsOn.length > 0 ? { dependsOn } : {}),
+		...(maxTokens !== undefined ? { maxTokens } : {}),
+		...(maxUsd !== undefined ? { maxUsd } : {}),
 	};
 	config.tracks.push(track);
 	saveConfig(config, cwd);
@@ -151,8 +171,17 @@ export async function listTracks(cwd = process.cwd()): Promise<TrackStatus[]> {
 
 		const budgetRecords = queryBudgetRecords(todoPath);
 		const totalTokens = budgetRecords.reduce((sum, r) => sum + r.tokens, 0);
-		// Blended Sonnet 4 estimate: $9/MTok (midpoint of $3 input / $15 output)
-		const estimatedUsd = (totalTokens * 9) / 1_000_000;
+		// Use input/output split when available; fall back to $9/MTok blended estimate.
+		const estimatedUsd = budgetRecords.reduce((sum, r) => {
+			if (r.inputTokens !== undefined && r.outputTokens !== undefined) {
+				return sum + (r.inputTokens * 3 + r.outputTokens * 15) / 1_000_000;
+			}
+			return sum + (r.tokens * 9) / 1_000_000;
+		}, 0);
+
+		const budgetExceeded =
+			(track.maxTokens !== undefined && totalTokens >= track.maxTokens) ||
+			(track.maxUsd !== undefined && estimatedUsd >= track.maxUsd);
 
 		results.push({
 			track,
@@ -161,6 +190,7 @@ export async function listTracks(cwd = process.cwd()): Promise<TrackStatus[]> {
 			todoDone,
 			swarmState,
 			...(totalTokens > 0 ? { cost: { totalTokens, estimatedUsd } } : {}),
+			...(budgetExceeded ? { budgetExceeded: true } : {}),
 		});
 	}
 	return results;

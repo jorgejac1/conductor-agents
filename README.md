@@ -133,6 +133,8 @@ conductor status auth
 --desc="description"                    Track description
 --files="src/auth/**,src/users/**"      Owned file globs (comma-separated)
 --depends="auth,payments"               Tracks this track depends on (comma-separated IDs)
+--max-usd=<n>                           Budget cap in USD; pauses new workers and fires Telegram alert when exceeded
+--max-tokens=<n>                        Budget cap in total tokens; same breach behavior as --max-usd
 ```
 
 ### `conductor run` options
@@ -317,6 +319,38 @@ This triggers a `cost` SSE event, which immediately updates the cost footer in t
 
 ---
 
+## Budget guardrails
+
+Each track supports optional per-track budget caps set in `config.json` (or via `conductor add` flags):
+
+```json
+{
+  "tracks": [
+    {
+      "id": "auth",
+      "maxUsd": 2.00,
+      "maxTokens": 500000
+    }
+  ]
+}
+```
+
+Or when creating a track:
+
+```bash
+conductor add auth --desc="Auth layer" --max-usd=2 --max-tokens=500000
+```
+
+When a track's cumulative spend exceeds either cap:
+
+- **New workers are paused** — the orchestrator will not spawn additional workers for that track until the budget is manually cleared or raised.
+- **Telegram alert fires** — if a Telegram bot is configured (`conductor telegram setup`), a message is sent immediately with the track name and the breach amount.
+- **`BUDGET` badge appears in the UI** — the track card in the Kanban view and the Settings tracks table both show a red `BUDGET` badge so the breach is immediately visible in the dashboard.
+
+Cost is calculated using the input/output token split when available (input: $3/MTok, output: $15/MTok). If only a total token count is reported (no split), a blended rate of $9/MTok is used.
+
+---
+
 ## Relationship to evalgate
 
 `conductor` uses [`evalgate`](https://github.com/jorgejac1/evalgate) as a library
@@ -497,7 +531,7 @@ The image is based on `node:22-slim` with `git` installed (required for worktree
 | v1.0 | Stable API, programmatic API export, Docker image, `conductor doctor`, CONTEXT.md injection, `agentArgs` config for non-Claude CLIs, `{task}` placeholder support | Shipped |
 | v2.0 | React dashboard rebuild — Mission Control design system, graph/topology view with zoom+pan, kanban token footers, wordmark, Settings redesign with live session stats, Activity tab, evalgate ^2.0.0 | Shipped |
 | v2.1 | Track dependencies (`--depends` flag, DAG `runAll`, cycle detection in `doctor`), live log streaming in detail panel (SSE), typed failure badges (`TIMEOUT` / `MERGE` / `FAILED` / `ERROR`), dependency edges in graph view, keyboard shortcuts (`r`, `↑↓`, `?`), `worker-start` / `worker-retry` SSE events | Shipped |
-| v2.2 | Budget guardrails — per-track `maxTokens` / `maxUsd` in `config.json`; breach pauses new workers and fires Telegram alert. Mobile-responsive layout. Activity tab drill-down tooltips | Planned |
+| v2.2 | Budget guardrails — per-track `maxTokens` / `maxUsd` in `config.json`; breach pauses new workers and fires Telegram alert. Mobile-responsive layout. Activity tab drill-down tooltips | Shipped |
 | v2.3 | `conductor report --html` — self-contained HTML export (graph snapshot, worker timeline, cost table). `conductor plan` diff mode — shows diff against current tracks before applying | Planned |
 | v3.0 | Workspace mode — multi-project dashboard aggregating multiple `.conductor/` dirs, remote workers via SSH/container | Planned |
 

@@ -1,6 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { SwarmOptions, SwarmResult, SwarmState } from "evalgate";
-import { getBudgetSummary, loadState, parseTodo, retryWorker, runSwarm } from "evalgate";
+import {
+	getBudgetSummary,
+	loadState,
+	parseTodo,
+	queryBudgetRecords,
+	retryWorker,
+	runSwarm,
+	swarmEvents,
+} from "evalgate";
 import { loadConfig, trackContextPath, trackTodoPath } from "./config.js";
 import { getTrack } from "./track.js";
 import type { Track } from "./types.js";
@@ -10,6 +18,16 @@ export interface RunTrackOpts {
 	agentCmd?: string;
 	resume?: boolean;
 	cwd?: string;
+}
+
+/** Emitted on swarmEvents when a track's accumulated spend exceeds its budget. */
+export interface BudgetExceededEvent {
+	type: "budget-exceeded";
+	trackId: string;
+	totalTokens: number;
+	totalUsd: number;
+	maxTokens?: number;
+	maxUsd?: number;
 }
 
 export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<SwarmResult> {
@@ -31,7 +49,51 @@ export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<Swa
 		resume: opts.resume ?? false,
 	};
 
-	return runSwarm(swarmOpts);
+	// Budget guardrail: check accumulated cost from previous runs before starting.
+	// Also listen during the run to emit budget-exceeded events when limits are crossed.
+	const hasBudgetLimit = track.maxTokens !== undefined || track.maxUsd !== undefined;
+	let budgetExceededEmitted = false;
+
+	function checkAndEmitBudget(): void {
+		if (!hasBudgetLimit || budgetExceededEmitted) return;
+		const records = queryBudgetRecords(todoPath);
+		const totalTokens = records.reduce((sum, r) => sum + r.tokens, 0);
+		// Blended Sonnet 4 estimate: $9/MTok
+		const totalUsd = (totalTokens * 9) / 1_000_000;
+		const tokensExceeded = track.maxTokens !== undefined && totalTokens >= track.maxTokens;
+		const usdExceeded = track.maxUsd !== undefined && totalUsd >= track.maxUsd;
+		if (tokensExceeded || usdExceeded) {
+			budgetExceededEmitted = true;
+			const evt: BudgetExceededEvent = {
+				type: "budget-exceeded",
+				trackId: id,
+				totalTokens,
+				totalUsd,
+				...(track.maxTokens !== undefined ? { maxTokens: track.maxTokens } : {}),
+				...(track.maxUsd !== undefined ? { maxUsd: track.maxUsd } : {}),
+			};
+			swarmEvents.emit("budget-exceeded", evt);
+		}
+	}
+
+	// Listen for cost events emitted during the swarm run.
+	function onCost(): void {
+		checkAndEmitBudget();
+	}
+
+	if (hasBudgetLimit) {
+		// Pre-run check in case we're already over budget from prior runs.
+		checkAndEmitBudget();
+		swarmEvents.on("cost", onCost);
+	}
+
+	try {
+		return await runSwarm(swarmOpts);
+	} finally {
+		if (hasBudgetLimit) {
+			swarmEvents.off("cost", onCost);
+		}
+	}
 }
 
 export async function retryTrackWorker(

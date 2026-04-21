@@ -12,11 +12,26 @@ import type {
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
+export interface ActivityLogEntry {
+	/** Monotonically increasing index for stable keying */
+	index: number;
+	/** Timestamp this event was received */
+	timestamp: number;
+	/** The raw event type */
+	type: string;
+	/** The full event payload */
+	payload: Record<string, unknown>;
+}
+
 interface DashboardState {
 	tracks: TrackStatus[];
 	swarmStates: Record<string, SwarmState>;
 	evalResults: Record<string, EvalResult>;
 	costHistory: CostEvent[];
+	/** Accumulated SSE event log for the Activity tab drill-down. */
+	activityLog: ActivityLogEntry[];
+	/** Tracks that have exceeded their budget limits (by trackId). */
+	budgetExceededTracks: Set<string>;
 	lastUpdate: Date | null;
 }
 
@@ -28,17 +43,28 @@ type Action =
 	| { type: "EVAL_RESULT"; workerId: string; passed: boolean; output?: string }
 	| { type: "COST_EVENT"; event: CostEvent }
 	| { type: "WORKER_START"; workerId: string; contractId: string }
-	| { type: "WORKER_RETRY"; workerId: string; contractId: string };
+	| { type: "WORKER_RETRY"; workerId: string; contractId: string }
+	| { type: "BUDGET_EXCEEDED"; trackId: string }
+	| { type: "ACTIVITY_LOG"; entry: Omit<ActivityLogEntry, "index"> };
 
 function reducer(state: DashboardState, action: Action): DashboardState {
 	switch (action.type) {
 		case "TRACKS_UPDATE": {
 			// Rebuild swarm states from the track list
 			const swarmStates: Record<string, SwarmState> = { ...state.swarmStates };
+			// Merge server-authoritative budgetExceeded flags from the track list
+			const budgetExceededTracks = new Set(state.budgetExceededTracks);
 			for (const t of action.tracks) {
 				if (t.swarmState) swarmStates[t.track.id] = t.swarmState;
+				if (t.budgetExceeded) budgetExceededTracks.add(t.track.id);
 			}
-			return { ...state, tracks: action.tracks, swarmStates, lastUpdate: new Date() };
+			return {
+				...state,
+				tracks: action.tracks,
+				swarmStates,
+				budgetExceededTracks,
+				lastUpdate: new Date(),
+			};
 		}
 		case "SWARM_UPDATE": {
 			// Identify which track this swarm belongs to via todoPath
@@ -64,6 +90,19 @@ function reducer(state: DashboardState, action: Action): DashboardState {
 				costHistory: [...state.costHistory, action.event],
 				lastUpdate: new Date(),
 			};
+		case "BUDGET_EXCEEDED": {
+			const next = new Set(state.budgetExceededTracks);
+			next.add(action.trackId);
+			return { ...state, budgetExceededTracks: next, lastUpdate: new Date() };
+		}
+		case "ACTIVITY_LOG": {
+			const index = state.activityLog.length;
+			return {
+				...state,
+				activityLog: [...state.activityLog, { ...action.entry, index }],
+				lastUpdate: new Date(),
+			};
+		}
 		// worker-start / worker-retry: state is already updated via the swarm SSE event.
 		// These action types exist so callers can dispatch them without a type error.
 		case "WORKER_START":
@@ -79,6 +118,8 @@ const INITIAL_STATE: DashboardState = {
 	swarmStates: {},
 	evalResults: {},
 	costHistory: [],
+	activityLog: [],
+	budgetExceededTracks: new Set(),
 	lastUpdate: null,
 };
 
@@ -134,6 +175,18 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 	// SSE handler
 	const handleMessage = useCallback(
 		(event: SSEEvent) => {
+			// Log all non-tracks events to the activity log for the drill-down UI.
+			if (event.type !== "tracks") {
+				dispatch({
+					type: "ACTIVITY_LOG",
+					entry: {
+						timestamp: Date.now(),
+						type: event.type,
+						payload: event as unknown as Record<string, unknown>,
+					},
+				});
+			}
+
 			switch (event.type) {
 				case "tracks":
 					dispatch({ type: "TRACKS_UPDATE", tracks: event.tracks });
@@ -175,6 +228,10 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 						contractId: event.contractId,
 					});
 					showToast(`Worker retrying: ${event.workerId.slice(0, 8)}`);
+					break;
+				case "budget-exceeded":
+					dispatch({ type: "BUDGET_EXCEEDED", trackId: event.trackId });
+					showToast(`Budget exceeded for track: ${event.trackId}`, "error");
 					break;
 			}
 		},

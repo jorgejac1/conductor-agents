@@ -355,6 +355,65 @@ describe("server", () => {
 		}
 	});
 
+	it("POST /api/tracks/:id/budget stores inputTokens and outputTokens when provided", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Budget Test", "budget test track", [], dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/tracks/budget-test/budget`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					contractId: "my-contract",
+					tokens: 100000,
+					inputTokens: 80000,
+					outputTokens: 20000,
+				}),
+			});
+			assert.strictEqual(res.status, 200);
+			const record = (await res.json()) as {
+				contractId: string;
+				tokens: number;
+				inputTokens: number;
+				outputTokens: number;
+			};
+			assert.strictEqual(record.inputTokens, 80000);
+			assert.strictEqual(record.outputTokens, 20000);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /api/tracks/:id/budget works without inputTokens/outputTokens", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Budget Test", "budget test track", [], dir);
+			handle = await startServer({ port: 0, cwd: dir });
+			const res = await fetch(`http://localhost:${handle.port}/api/tracks/budget-test/budget`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ contractId: "my-contract", tokens: 5000 }),
+			});
+			assert.strictEqual(res.status, 200);
+			const record = (await res.json()) as {
+				contractId: string;
+				tokens: number;
+				inputTokens?: number;
+				outputTokens?: number;
+			};
+			assert.strictEqual(record.contractId, "my-contract");
+			assert.strictEqual(record.tokens, 5000);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("GET /api/telegram-status returns configured: false when no telegram config", async () => {
 		const dir = tmpDir();
 		let handle: ServerHandle | undefined;

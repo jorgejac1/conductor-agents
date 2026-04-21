@@ -139,6 +139,53 @@ describe("track", () => {
 		}
 	});
 
+	it("listTracks calculates estimatedUsd from input/output split when available", async () => {
+		const dir = tmpDir();
+		try {
+			initConductor(dir);
+			createTrack("Split Cost", "split cost test", [], dir);
+			const { reportTokenUsage } = await import("evalgate");
+			const todoPath = trackTodoPath("split-cost", dir);
+			// 80k input × $3/MTok + 20k output × $15/MTok = $0.24 + $0.30 = $0.54
+			reportTokenUsage(todoPath, "contract-a", 100_000, undefined, {
+				inputTokens: 80_000,
+				outputTokens: 20_000,
+			});
+			const statuses = await listTracks(dir);
+			const track = statuses.find((s) => s.track.id === "split-cost");
+			assert.ok(track?.cost, "cost should be present after reporting token usage");
+			assert.strictEqual(track.cost.totalTokens, 100_000);
+			assert.ok(
+				Math.abs((track.cost.estimatedUsd ?? 0) - 0.54) < 0.001,
+				`estimatedUsd should be ~0.54, got ${track.cost.estimatedUsd}`,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("listTracks falls back to blended rate when no split present", async () => {
+		const dir = tmpDir();
+		try {
+			initConductor(dir);
+			createTrack("Blended Cost", "blended rate test", [], dir);
+			const { reportTokenUsage } = await import("evalgate");
+			const todoPath = trackTodoPath("blended-cost", dir);
+			// 100k tokens × $9/MTok = $0.90
+			reportTokenUsage(todoPath, "contract-a", 100_000);
+			const statuses = await listTracks(dir);
+			const track = statuses.find((s) => s.track.id === "blended-cost");
+			assert.ok(track?.cost, "cost should be present after reporting token usage");
+			assert.strictEqual(track.cost.totalTokens, 100_000);
+			assert.ok(
+				Math.abs((track.cost.estimatedUsd ?? 0) - 0.9) < 0.001,
+				`estimatedUsd should be ~0.90, got ${track.cost.estimatedUsd}`,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("CONTEXT.md contains name, description, and files", () => {
 		const dir = tmpDir();
 		try {

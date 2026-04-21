@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { GraphView } from "./GraphView.js";
 import { KanbanView } from "./KanbanView.js";
 
@@ -55,12 +55,23 @@ function GraphIcon() {
 export function TracksTab() {
 	const [view, setView] = useState<ViewMode>(getInitialView);
 
-	function switchView(v: ViewMode) {
+	const switchView = useCallback((v: ViewMode) => {
 		setView(v);
 		try {
 			localStorage.setItem("conductor.tracksView", v);
 		} catch {}
-	}
+	}, []);
+
+	// Reset to kanban when viewport enters mobile width — graph is unusable there.
+	useEffect(() => {
+		const mq = window.matchMedia("(max-width: 768px)");
+		function onMqChange(e: MediaQueryListEvent) {
+			if (e.matches) switchView("kanban");
+		}
+		mq.addEventListener("change", onMqChange);
+		if (mq.matches) switchView("kanban");
+		return () => mq.removeEventListener("change", onMqChange);
+	}, [switchView]);
 
 	return (
 		<div className="tracks-tab">

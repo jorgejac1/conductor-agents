@@ -16,6 +16,10 @@ export interface Track {
 	agentArgs?: string[]; // e.g. ["--full-auto", "{task}"] for codex; {task} is replaced with context+title
 	/** IDs of tracks that must complete (all workers done) before this track runs. */
 	dependsOn?: string[];
+	/** Maximum token spend before pausing new workers for this track. */
+	maxTokens?: number;
+	/** Maximum estimated USD spend before pausing new workers for this track. */
+	maxUsd?: number;
 }
 
 export interface ConductorConfig {
@@ -40,4 +44,5 @@ export interface TrackStatus {
 	todoDone: number;
 	swarmState: SwarmState | null;
 	cost?: TrackCostSummary;
+	budgetExceeded?: boolean;
 }

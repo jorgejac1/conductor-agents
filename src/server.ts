@@ -16,6 +16,7 @@ import type { AddressInfo } from "node:net";
 import type { SwarmState } from "evalgate";
 import { queryRuns, reportTokenUsage, swarmEvents } from "evalgate";
 import { loadConfig, trackTodoPath } from "./config.js";
+import type { BudgetExceededEvent } from "./orchestrator.js";
 import { getTrackCost, getTrackState, retryTrackWorker, runTrack } from "./orchestrator.js";
 import { listTracks } from "./track.js";
 import type { TrackStatus } from "./types.js";
@@ -130,6 +131,21 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		}
 	}
 	swarmEvents.on("worker-retry", broadcastWorkerRetry);
+
+	// Forward budget-exceeded events (v2.2)
+	function broadcastBudgetExceeded(evt: BudgetExceededEvent): void {
+		const data = `data: ${JSON.stringify(evt)}\n\n`;
+		for (const res of sseClients) {
+			try {
+				res.write(data);
+			} catch {
+				sseClients.delete(res);
+			}
+		}
+		// Re-broadcast tracks so the kanban BUDGET badge reflects the new state.
+		scheduleBroadcastTracks();
+	}
+	swarmEvents.on("budget-exceeded", broadcastBudgetExceeded);
 
 	function readBody(req: IncomingMessage): Promise<string> {
 		return new Promise((resolve, reject) => {
@@ -452,7 +468,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		const budgetId = trackIdFromUrl(url, "budget");
 		if (budgetId && method === "POST") {
 			const body = await readBody(req);
-			let parsed: { contractId?: string; tokens?: number; workerId?: string } = {};
+			let parsed: {
+				contractId?: string;
+				tokens?: number;
+				inputTokens?: number;
+				outputTokens?: number;
+				workerId?: string;
+			} = {};
 			try {
 				parsed = JSON.parse(body);
 			} catch {
@@ -464,8 +486,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 				return;
 			}
 			const todoPath = trackTodoPath(budgetId, cwd);
-			const budgetOpts: { workerId?: string } = {};
+			const budgetOpts: { inputTokens?: number; outputTokens?: number; workerId?: string } = {};
 			if (parsed.workerId) budgetOpts.workerId = parsed.workerId;
+			if (typeof parsed.inputTokens === "number") budgetOpts.inputTokens = parsed.inputTokens;
+			if (typeof parsed.outputTokens === "number") budgetOpts.outputTokens = parsed.outputTokens;
 			const record = reportTokenUsage(
 				todoPath,
 				parsed.contractId,
@@ -524,6 +548,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			swarmEvents.off("eval-result", broadcastEvalResult);
 			swarmEvents.off("worker-start", broadcastWorkerStart);
 			swarmEvents.off("worker-retry", broadcastWorkerRetry);
+			swarmEvents.off("budget-exceeded", broadcastBudgetExceeded);
 			for (const res of sseClients) {
 				try {
 					res.end();

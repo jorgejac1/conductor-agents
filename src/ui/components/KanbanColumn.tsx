@@ -13,8 +13,10 @@ interface KanbanColumnProps {
 }
 
 export function KanbanColumn({ trackStatus, workers, evalResults }: KanbanColumnProps) {
-	const { showToast, showError, refreshTracks } = useDashboard();
+	const { showToast, showError, refreshTracks, state } = useDashboard();
 	const { track, todoTotal, todoDone, cost } = trackStatus;
+	const budgetExceeded =
+		trackStatus.budgetExceeded === true || state.budgetExceededTracks.has(track.id);
 	const pct = todoTotal > 0 ? Math.round((todoDone / todoTotal) * 100) : 0;
 	const [submitting, setSubmitting] = useState(false);
 
@@ -45,7 +47,14 @@ export function KanbanColumn({ trackStatus, workers, evalResults }: KanbanColumn
 	return (
 		<div className="kanban-col">
 			<div className="kanban-col-header">
-				<span className="kanban-col-title">{track.name}</span>
+				<div className="kanban-col-title-wrap">
+					<span className="kanban-col-title">{track.name}</span>
+					{budgetExceeded && (
+						<span className="badge badge-budget" title="Budget limit exceeded">
+							BUDGET
+						</span>
+					)}
+				</div>
 				<div className="kanban-col-meta">
 					<span>
 						{todoDone}/{todoTotal}
