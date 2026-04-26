@@ -14,6 +14,7 @@ import {
 export type { BudgetExceededEvent } from "evalgate";
 
 import { loadConfig, trackContextPath, trackTodoPath } from "./config.js";
+import { buildRunner } from "./runners/index.js";
 import { getTrack } from "./track.js";
 import type { Track } from "./types.js";
 
@@ -27,6 +28,31 @@ export interface RunTrackOpts {
 // Map of trackId → AbortController for in-flight runSwarm calls.
 // Allows pauseTrack to abort new-worker spawning without killing in-flight workers.
 const activeControllers = new Map<string, AbortController>();
+
+/**
+ * Split a raw agentCmd string (e.g. "claude --dangerously-skip-permissions")
+ * into a binary name and an optional extra-flags array to prepend to agentArgs.
+ * Node's spawn() requires the binary and args to be separate — it does not
+ * interpret shell metacharacters, so "claude --flag" would fail with ENOENT.
+ */
+function resolveAgentCmd(raw: string): { cmd: string; extraFlags: string[] } {
+	const parts = raw.trim().split(/\s+/);
+	return { cmd: parts[0] ?? "claude", extraFlags: parts.slice(1) };
+}
+
+/**
+ * Merge extra flags from agentCmd splitting with any explicitly configured
+ * agentArgs. When flags are present the full default Claude args must be
+ * included because evalgate replaces its defaults with agentArgs entirely.
+ */
+function buildAgentArgs(
+	extraFlags: string[],
+	resolvedAgentArgs: string[] | undefined,
+): string[] | undefined {
+	if (extraFlags.length === 0) return resolvedAgentArgs;
+	const base = resolvedAgentArgs ?? ["--print", "--output-format", "json", "{task}"];
+	return [...extraFlags, ...base];
+}
 
 function pauseMarkerPath(id: string, cwd: string): string {
 	return join(cwd, ".conductor", "tracks", id, "PAUSED");
@@ -72,6 +98,13 @@ export function pauseTrack(id: string, cwd = process.cwd()): boolean {
 export async function resumeTrack(id: string, opts: RunTrackOpts = {}): Promise<SwarmResult> {
 	const cwd = opts.cwd ?? process.cwd();
 	clearPauseMarker(id, cwd);
+	// If the swarm is still actively running (in-flight workers from a live pause),
+	// just clear the pause marker and let those workers finish. Starting a competing
+	// runSwarm would reset in-flight workers to "pending" and try to recreate their
+	// worktrees while the originals are still mounted — causing SETUP failures.
+	if (activeControllers.has(id)) {
+		return { done: 0, failed: 0, skipped: 0, state: { id: "", ts: "", todoPath: "", workers: [] } };
+	}
 	return runTrack(id, { ...opts, resume: true, cwd });
 }
 
@@ -84,7 +117,12 @@ export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<Swa
 	const ctxPath = trackContextPath(id, cwd);
 	const taskContext = existsSync(ctxPath) ? readFileSync(ctxPath, "utf8") : undefined;
 
-	const resolvedAgentArgs = track.agentArgs ?? config?.defaults.agentArgs;
+	const rawCmd = opts.agentCmd ?? track.agentCmd ?? config?.defaults.agentCmd ?? "claude";
+	const { cmd: agentCmd, extraFlags } = resolveAgentCmd(rawCmd);
+	const resolvedAgentArgs = buildAgentArgs(
+		extraFlags,
+		track.agentArgs ?? config?.defaults.agentArgs,
+	);
 
 	const controller = new AbortController();
 	activeControllers.set(id, controller);
@@ -114,13 +152,18 @@ export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<Swa
 	const swarmOpts: SwarmOptions = {
 		todoPath,
 		concurrency: opts.concurrency ?? track.concurrency ?? config?.defaults.concurrency ?? 3,
-		agentCmd: opts.agentCmd ?? track.agentCmd ?? config?.defaults.agentCmd ?? "claude",
+		agentCmd,
 		...(resolvedAgentArgs !== undefined && { agentArgs: resolvedAgentArgs }),
 		...(taskContext !== undefined && { taskContext }),
 		resume: opts.resume ?? false,
 		signal: controller.signal,
+		runner: buildRunner(track),
+		// Check budget after each worker completes and abort the remaining queue if
+		// the track limit is exceeded. onBudgetExceeded only fires for contract-level
+		// budgets set on the Contract object; track-level budgets (maxTokens/maxUsd in
+		// config.json) are conductor-owned, so we check them here instead.
 		...(hasBudgetLimit && {
-			onBudgetExceeded(_evt) {
+			onWorkerComplete(_worker) {
 				const records = queryBudgetRecords(todoPath);
 				const totalTokens = records.reduce((s, r) => s + r.tokens, 0);
 				const totalInput = records.reduce((s, r) => s + (r.inputTokens ?? 0), 0);
@@ -152,7 +195,12 @@ export async function retryTrackWorker(
 	const track = getTrack(id, cwd);
 	const config = loadConfig(cwd);
 	const todoPath = trackTodoPath(id, cwd);
-	const agentCmd = opts.agentCmd ?? track.agentCmd ?? config?.defaults.agentCmd ?? "claude";
+	const rawCmd = opts.agentCmd ?? track.agentCmd ?? config?.defaults.agentCmd ?? "claude";
+	const { cmd: agentCmd, extraFlags } = resolveAgentCmd(rawCmd);
+	const resolvedAgentArgs = buildAgentArgs(
+		extraFlags,
+		track.agentArgs ?? config?.defaults.agentArgs,
+	);
 
 	const ctxPath = trackContextPath(id, cwd);
 	const taskContext = existsSync(ctxPath) ? readFileSync(ctxPath, "utf8") : undefined;
@@ -162,7 +210,6 @@ export async function retryTrackWorker(
 	const match = state?.workers.find((w) => w.id.startsWith(workerId));
 	if (!match) throw new Error(`worker not found: ${workerId}`);
 
-	const resolvedAgentArgs = track.agentArgs ?? config?.defaults.agentArgs;
 	await retryWorker(match.id, todoPath, {
 		todoPath,
 		agentCmd,

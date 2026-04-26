@@ -23,6 +23,10 @@ export {
 	generatePlan,
 	parsePlanDraft,
 } from "./planner.js";
+// Runners
+export { DockerRunner } from "./runners/docker.js";
+export { buildRunner } from "./runners/index.js";
+export { SSHRunner } from "./runners/ssh.js";
 // Server
 export type { ServerHandle, ServerOptions } from "./server.js";
 export { startServer } from "./server.js";
@@ -31,8 +35,11 @@ export { createTrack, deleteTrack, getTrack, initConductor, listTracks } from ".
 // Types
 export type {
 	ConductorConfig,
+	DockerRunnerConfig,
+	SSHRunnerConfig,
 	TelegramBotConfig,
 	Track,
 	TrackCostSummary,
 	TrackStatus,
+	WorkspaceConfig,
 } from "./types.js";

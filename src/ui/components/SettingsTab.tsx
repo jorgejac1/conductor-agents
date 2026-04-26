@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "../context/DashboardContext.js";
-import { fetchConfig, fetchTelegramStatus, fetchVersion } from "../hooks/api.js";
-import type { ConductorConfig, VersionInfo } from "../types.js";
+import { apiPatchTrack, fetchConfig, fetchTelegramStatus, fetchVersion } from "../hooks/api.js";
+import type { ConductorConfig, Track, VersionInfo } from "../types.js";
 
 export function SettingsTab() {
 	const { showError, state } = useDashboard();
@@ -50,7 +50,7 @@ export function SettingsTab() {
 			<div className="settings-col-main">
 				<div className="settings-section-title">
 					Tracks
-					{config && <span className="settings-count">{config.tracks.length}</span>}
+					{config?.tracks && <span className="settings-count">{config.tracks.length}</span>}
 				</div>
 				<div className="card settings-card settings-tracks-table">
 					<div className="settings-tracks-head">
@@ -59,10 +59,10 @@ export function SettingsTab() {
 						<span>Agent</span>
 						<span>Cost</span>
 					</div>
-					{config?.tracks.length === 0 ? (
+					{(config?.tracks?.length ?? 0) === 0 ? (
 						<div className="settings-empty">No tracks configured</div>
 					) : (
-						config?.tracks.map((t) => {
+						config?.tracks?.map((t) => {
 							const trackCost = state.tracks.find((ts) => ts.track.id === t.id)?.cost;
 							return (
 								<div key={t.id} className="settings-track-row">
@@ -194,6 +194,120 @@ export function SettingsTab() {
 					</div>
 				)}
 			</div>
+
+			{/* Track Settings Editor — full width below the two columns */}
+			<div className="settings-col-full">
+				<TrackSettingsEditor />
+			</div>
+		</div>
+	);
+}
+
+// ─── TrackSettingsEditor ──────────────────────────────────────────────────────
+
+function TrackSettingsEditor() {
+	const { showToast, showError } = useDashboard();
+	const [config, setConfig] = useState<ConductorConfig | null>(null);
+	const [saving, setSaving] = useState<string | null>(null);
+	const [edits, setEdits] = useState<Record<string, Partial<Track>>>({});
+
+	useEffect(() => {
+		fetchConfig()
+			.then(setConfig)
+			.catch(() => {
+				/* ignore */
+			});
+	}, []);
+
+	if (!config?.tracks) return <div className="settings-loading">Loading config…</div>;
+
+	function setField(id: string, key: keyof Track, value: unknown) {
+		setEdits((prev) => ({ ...prev, [id]: { ...prev[id], [key]: value } }));
+	}
+
+	async function save(trackId: string) {
+		const patch = edits[trackId];
+		if (!patch || Object.keys(patch).length === 0) return;
+		setSaving(trackId);
+		try {
+			await apiPatchTrack(trackId, patch as Record<string, unknown>);
+			showToast(`Saved ${trackId}`);
+		} catch (e) {
+			showError(e instanceof Error ? e.message : "Save failed");
+		} finally {
+			setSaving(null);
+		}
+	}
+
+	return (
+		<div className="track-settings-editor">
+			<h3 className="settings-section-title">Track Settings</h3>
+			{config.tracks.map((track) => {
+				const edit = edits[track.id] ?? {};
+				return (
+					<div key={track.id} className="track-settings-row">
+						<span className="track-settings-id">{track.id}</span>
+						<label className="track-settings-field">
+							<span>Max USD</span>
+							<input
+								type="number"
+								min="0"
+								step="0.01"
+								placeholder="—"
+								value={edit.maxUsd ?? track.maxUsd ?? ""}
+								onChange={(e) =>
+									setField(track.id, "maxUsd", e.target.value ? Number(e.target.value) : undefined)
+								}
+								className="track-settings-input"
+							/>
+						</label>
+						<label className="track-settings-field">
+							<span>Max Tokens</span>
+							<input
+								type="number"
+								min="0"
+								step="1000"
+								placeholder="—"
+								value={edit.maxTokens ?? track.maxTokens ?? ""}
+								onChange={(e) =>
+									setField(
+										track.id,
+										"maxTokens",
+										e.target.value ? Number(e.target.value) : undefined,
+									)
+								}
+								className="track-settings-input"
+							/>
+						</label>
+						<label className="track-settings-field">
+							<span>Concurrency</span>
+							<input
+								type="number"
+								min="1"
+								max="10"
+								placeholder="—"
+								value={edit.concurrency ?? track.concurrency ?? ""}
+								onChange={(e) =>
+									setField(
+										track.id,
+										"concurrency",
+										e.target.value ? Number(e.target.value) : undefined,
+									)
+								}
+								className="track-settings-input"
+							/>
+						</label>
+						<button
+							type="button"
+							className="btn-save-track"
+							disabled={saving === track.id}
+							onClick={() => void save(track.id)}
+						>
+							{saving === track.id ? "Saving…" : "Save"}
+						</button>
+					</div>
+				);
+			})}
 		</div>
 	);
 }

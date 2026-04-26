@@ -7,6 +7,7 @@ import { StatusBar } from "./components/StatusBar.js";
 import { Toast } from "./components/Toast.js";
 import { TracksTab } from "./components/TracksTab.js";
 import { WorkersTab } from "./components/WorkersTab.js";
+import { WorkspaceSidebar } from "./components/WorkspaceSidebar.js";
 import { useDashboard } from "./context/DashboardContext.js";
 import type { TabId } from "./types.js";
 
@@ -65,13 +66,16 @@ export function App() {
 				runningCount={runningCount}
 			/>
 
-			<main className="tab-content">
-				{activeTab === "tracks" && <TracksTab />}
-				{activeTab === "workers" && <WorkersTab />}
-				{activeTab === "history" && <HistoryTab />}
-				{activeTab === "activity" && <ActivityTab />}
-				{activeTab === "settings" && <SettingsTab />}
-			</main>
+			<div className="app-body">
+				<WorkspaceSidebar />
+				<main className="tab-content">
+					{activeTab === "tracks" && <TracksTab />}
+					{activeTab === "workers" && <WorkersTab />}
+					{activeTab === "history" && <HistoryTab />}
+					{activeTab === "activity" && <ActivityTab />}
+					{activeTab === "settings" && <SettingsTab />}
+				</main>
+			</div>
 
 			<StatusBar tracks={state.tracks} lastUpdate={state.lastUpdate} />
 

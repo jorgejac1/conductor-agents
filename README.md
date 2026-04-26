@@ -76,7 +76,8 @@ npx conductor-agents help
 ```bash
 # 1. Initialize in your repo
 cd your-project
-git init  # must be a git repo
+git init  # must be a git repo with at least one commit
+git commit --allow-empty -m "init"  # if starting from scratch
 conductor init
 
 # Option A — generate a plan from a goal (v0.5+)
@@ -143,8 +144,22 @@ conductor status auth
 
 ```
 --concurrency=N        Worker concurrency (default: 3)
---agent=cmd            Agent command (default: claude)
+--agent=cmd            Agent command (default: claude) — inline flags are supported
 --resume               Resume from existing state, skip done workers
+```
+
+The `--agent` flag (and the `agentCmd` field in `config.json`) supports inline flags. conductor splits the string automatically so Node's `spawn` receives the binary and args separately:
+
+```bash
+conductor run auth --agent="claude --dangerously-skip-permissions"
+```
+
+```json
+{
+  "defaults": {
+    "agentCmd": "claude --dangerously-skip-permissions"
+  }
+}
 ```
 
 ### `conductor logs` options
@@ -175,6 +190,8 @@ Tasks live in `.conductor/tracks/<name>/todo.md` and follow the
 
 The verifier command runs inside the worker's git worktree after the agent
 finishes. Exit 0 = merge. Anything else = fail (and retry if retries remain).
+
+> **Requirement:** the repository must have at least one commit before running workers. evalgate creates per-worker branches from `HEAD` — if there is no commit yet, the merge step will fail. Run `git commit --allow-empty -m "init"` if starting from a fresh `git init`.
 
 Run outcomes are recorded in the track's history:
 - **PASS** — verifier exited 0 *and* the git merge committed the work back to main.
@@ -280,7 +297,7 @@ The dashboard is a React app with the **Mission Control** design system — a bl
 
 **Tracks** has two view modes, toggled via the toolbar:
 
-- **Kanban** — one column per track, one card per worker. Cards show a status dot, task title, and eval result badge (`PASS` / `FAIL`). The column footer shows cumulative token count and estimated USD spend for that track. Click any card to expand the full session log inline. A ⏸ Pause / ▶ Resume button appears in the column header whenever workers are running or the track is paused.
+- **Kanban** — one column per track, one card per worker. Cards show a status dot, task title, and eval result badge (`PASS` / `FAIL`). The column footer shows cumulative token count and estimated USD spend for that track. Click any card to expand the full session log inline. A ⏸ Pause / ▶ Resume button appears in the column header whenever workers are running or the track is paused. If a track has no tasks in `todo.md`, the Run button is disabled and shows a hint: _"Add tasks to todo.md to enable"_.
 - **Graph** — an orbital topology view. Tracks are arranged in a ring; their workers orbit outward in a 130° arc. Tracks with `dependsOn` relationships are connected by dashed edges. Scroll to zoom (0.3×–3×), drag to pan, click a track node to open a slide-in detail panel with the full worker list, retry controls, and live-streaming logs. Hover dims non-active tracks. Press Escape or click the background to deselect. View mode is remembered between sessions via localStorage.
 
   **Keyboard shortcuts** (graph view):

@@ -1,4 +1,10 @@
-import type { ConductorConfig, RunRecord, TrackStatus, VersionInfo } from "../types.js";
+import type {
+	ConductorConfig,
+	ProjectEntry,
+	RunRecord,
+	TrackStatus,
+	VersionInfo,
+} from "../types.js";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
 	const res = await fetch(url, init);
@@ -54,7 +60,7 @@ export async function fetchLog(trackId: string, workerId: string): Promise<strin
 export async function apiRunTrack(
 	trackId: string,
 	opts: { concurrency?: number; agentCmd?: string; resume?: boolean } = {},
-): Promise<{ done: number; failed: number; skipped: number }> {
+): Promise<{ accepted: boolean }> {
 	return json(`/api/tracks/${trackId}/run`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -77,7 +83,7 @@ export async function apiPauseTrack(trackId: string): Promise<{ paused: boolean 
 export async function apiResumeTrack(
 	trackId: string,
 	opts: { concurrency?: number; agentCmd?: string } = {},
-): Promise<{ done: number; failed: number; skipped: number }> {
+): Promise<{ accepted: boolean }> {
 	return json(`/api/tracks/${trackId}/resume`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -88,4 +94,41 @@ export async function apiResumeTrack(
 export async function fetchIsPaused(trackId: string): Promise<boolean> {
 	const r = await json<{ paused: boolean }>(`/api/tracks/${trackId}/paused`);
 	return r.paused;
+}
+
+export async function fetchWorkspace(): Promise<{ root: string; projectCount: number }> {
+	return json<{ root: string; projectCount: number }>("/api/workspace");
+}
+
+export async function fetchWorkspaceProjects(): Promise<ProjectEntry[]> {
+	return json<ProjectEntry[]>("/api/workspace/projects");
+}
+
+export async function apiInitProject(
+	projectId: string,
+	opts: { goal?: string } = {},
+): Promise<{ ok: boolean }> {
+	return json(`/api/workspace/projects/${projectId}/init`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(opts),
+	});
+}
+
+export async function apiRunWorkspaceTrack(
+	projectId: string,
+	trackId: string,
+): Promise<{ ok: boolean }> {
+	return json(`/api/workspace/projects/${projectId}/run/${trackId}`, { method: "POST" });
+}
+
+export async function apiPatchTrack(
+	trackId: string,
+	patch: Record<string, unknown>,
+): Promise<{ ok: boolean }> {
+	return json(`/api/config/tracks/${trackId}`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(patch),
+	});
 }

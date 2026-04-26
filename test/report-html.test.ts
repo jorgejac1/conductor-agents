@@ -14,9 +14,9 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { cmdReport } from "../src/cli/report.js";
 import { initConductor } from "../src/track.js";
@@ -101,8 +101,8 @@ describe("conductor report --html", () => {
 			// No tracks created — asking for a nonexistent track-id should fail.
 
 			// Capture stderr to verify message
-			const stderrChunks: string[] = [];
-			const origStderr = process.stderr.write.bind(process.stderr);
+			const _stderrChunks: string[] = [];
+			const _origStderr = process.stderr.write.bind(process.stderr);
 			const origConsoleError = console.error.bind(console);
 			const errors: string[] = [];
 			console.error = (...args: unknown[]) => {

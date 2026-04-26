@@ -3,6 +3,26 @@ import { useCallback, useState } from "react";
 import { fetchLog } from "../hooks/api.js";
 import type { EvalResult, WorkerState } from "../types.js";
 
+function formatLog(raw: string): string {
+	if (!raw) return raw;
+	try {
+		const resultLine = raw.split("\n").find((l) => {
+			if (!l.trim().startsWith("{")) return false;
+			const o = JSON.parse(l) as Record<string, unknown>;
+			return o.type === "result";
+		});
+		if (resultLine) {
+			const o = JSON.parse(resultLine) as { result?: string; total_cost_usd?: number };
+			const header = raw.split("\n").slice(0, 4).join("\n");
+			const cost = o.total_cost_usd != null ? `\n\n[cost: $${o.total_cost_usd.toFixed(6)}]` : "";
+			return `${header}\n\n${o.result ?? ""}${cost}`;
+		}
+	} catch {
+		/* not JSON format — show as-is */
+	}
+	return raw;
+}
+
 function statusDotClass(worker: WorkerState, evalResult?: EvalResult): string {
 	if (worker.status === "done") {
 		const passed = evalResult?.passed ?? worker.verifierPassed;
@@ -14,7 +34,13 @@ function statusDotClass(worker: WorkerState, evalResult?: EvalResult): string {
 	return `status-dot status-dot-${worker.status}`;
 }
 
-function badgeForWorker(worker: WorkerState, evalResult?: EvalResult): React.ReactNode {
+const ACTIVE_STATUSES = new Set(["spawning", "running", "verifying", "merging"]);
+
+function badgeForWorker(
+	worker: WorkerState,
+	evalResult?: EvalResult,
+	trackPaused?: boolean,
+): React.ReactNode {
 	if (worker.status === "done") {
 		const passed = evalResult?.passed ?? worker.verifierPassed;
 		if (passed === true) return <span className="badge badge-pass">PASS</span>;
@@ -30,9 +56,16 @@ function badgeForWorker(worker: WorkerState, evalResult?: EvalResult): React.Rea
 				return <span className="badge badge-merge">MERGE</span>;
 			case "verifier-fail":
 				return <span className="badge badge-fail">FAILED</span>;
+			case "worktree-create":
+				return <span className="badge badge-error">SETUP</span>;
+			case "agent-crash":
+				return <span className="badge badge-error">CRASH</span>;
 			default:
-				return <span className="badge badge-error">ERROR</span>;
+				return <span className="badge badge-fail">FAILED</span>;
 		}
+	}
+	if (trackPaused && ACTIVE_STATUSES.has(worker.status)) {
+		return <span className="badge badge-paused">PAUSED</span>;
 	}
 	return <span className={`badge badge-${worker.status}`}>{worker.status.toUpperCase()}</span>;
 }
@@ -51,9 +84,10 @@ interface KanbanCardProps {
 	trackId: string;
 	worker: WorkerState;
 	evalResult?: EvalResult;
+	trackPaused?: boolean;
 }
 
-export function KanbanCard({ trackId, worker, evalResult }: KanbanCardProps) {
+export function KanbanCard({ trackId, worker, evalResult, trackPaused }: KanbanCardProps) {
 	const [expanded, setExpanded] = useState(false);
 	const [log, setLog] = useState<string>("");
 	const [loading, setLoading] = useState(false);
@@ -86,7 +120,7 @@ export function KanbanCard({ trackId, worker, evalResult }: KanbanCardProps) {
 					<div className={statusDotClass(worker, evalResult)} />
 					<span className="kanban-card-title">{worker.contractTitle}</span>
 				</div>
-				{badgeForWorker(worker, evalResult)}
+				{badgeForWorker(worker, evalResult, trackPaused)}
 			</div>
 			<div className="kanban-card-footer">
 				<div>
@@ -102,7 +136,9 @@ export function KanbanCard({ trackId, worker, evalResult }: KanbanCardProps) {
 				</button>
 			</div>
 			{expanded && (
-				<div className="kanban-log-panel">{loading ? "loading…" : log || "(empty log)"}</div>
+				<div className="kanban-log-panel">
+					{loading ? "loading…" : formatLog(log) || "(empty log)"}
+				</div>
 			)}
 		</div>
 	);

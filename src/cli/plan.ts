@@ -41,6 +41,17 @@ export async function cmdPlan(args: string[]): Promise<number> {
 	const cwd = process.cwd();
 
 	try {
+		if (sub === "iterate") {
+			const { generatePlanIterate } = await import("../planner.js");
+			const result = await generatePlanIterate(cwd);
+			if (!result) {
+				console.log("No failed workers found in the last run — nothing to iterate on.");
+				return 0;
+			}
+			console.log(`\nIteration plan generated. Run 'conductor plan diff' to review.`);
+			return 0;
+		}
+
 		if (sub === "apply") {
 			const dryRun = flags["dry-run"] === true;
 			const yes = flags.yes === true;
@@ -105,6 +116,7 @@ export async function cmdPlan(args: string[]): Promise<number> {
 			console.error("       conductor plan apply [--yes] [--dry-run]");
 			console.error("       conductor plan diff");
 			console.error("       conductor plan show");
+			console.error("       conductor plan iterate");
 			return 1;
 		}
 

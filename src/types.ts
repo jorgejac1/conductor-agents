@@ -5,6 +5,28 @@ export interface TelegramBotConfig {
 	chatId: number;
 }
 
+export interface SSHRunnerConfig {
+	host: string;
+	user: string;
+	/** Path to SSH private key file */
+	keyPath: string;
+	/** Remote working directory. Default: /tmp/conductor-workers */
+	remoteCwd?: string;
+}
+
+export interface DockerRunnerConfig {
+	image: string;
+	/** Additional env vars: ["KEY=value"] */
+	env?: string[];
+	/** Additional volume mounts: ["/host:/container"] */
+	mounts?: string[];
+}
+
+export interface WorkspaceConfig {
+	/** Absolute path pinned as workspace root. Auto-detected if absent. */
+	root?: string;
+}
+
 export interface Track {
 	id: string; // slug: "auth-module"
 	name: string; // display: "Auth Module"
@@ -20,6 +42,10 @@ export interface Track {
 	maxTokens?: number;
 	/** Maximum estimated USD spend before pausing new workers for this track. */
 	maxUsd?: number;
+	/** Runner type for agent workers. Defaults to "local". */
+	runner?: "local" | "ssh" | "docker";
+	/** Configuration for the selected runner. */
+	runnerConfig?: SSHRunnerConfig | DockerRunnerConfig;
 }
 
 export interface ConductorConfig {
@@ -30,6 +56,10 @@ export interface ConductorConfig {
 		agentArgs?: string[]; // global default agentArgs; overridden per-track
 	};
 	telegram?: TelegramBotConfig;
+	webhook?: {
+		/** HMAC-SHA256 secret for validating X-Hub-Signature-256 on inbound webhooks */
+		secret?: string;
+	};
 }
 
 export interface TrackCostSummary {

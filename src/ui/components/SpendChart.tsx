@@ -58,11 +58,14 @@ export function SpendChart({ bars, maxValue }: SpendChartProps) {
 			ctx.fill();
 			ctx.globalAlpha = 1;
 
-			// Label
+			// Label — truncate to fit bar width (~7 chars at 9px monospace per bar)
 			ctx.fillStyle = "#64748b";
 			ctx.font = "9px monospace";
 			ctx.textAlign = "center";
-			ctx.fillText(bar.label.slice(0, 4), x + barWidth / 2, H - 4);
+			const maxChars = Math.max(3, Math.floor(barWidth / 6));
+			const label =
+				bar.label.length > maxChars ? `${bar.label.slice(0, maxChars - 1)}…` : bar.label;
+			ctx.fillText(label, x + barWidth / 2, H - 4);
 		});
 	}, [bars, maxValue]);
 

@@ -314,6 +314,10 @@ body {
 	background: rgba(251, 191, 36, 0.15);
 	color: var(--timeout);
 }
+.badge-paused {
+	background: rgba(148, 163, 184, 0.15);
+	color: #94a3b8;
+}
 .badge-merge {
 	background: rgba(251, 146, 60, 0.15);
 	color: var(--merge);
@@ -683,6 +687,14 @@ body {
 .run-btn-col {
 	width: 100%;
 	justify-content: center;
+}
+
+.run-btn-hint {
+	margin-top: 6px;
+	font-size: 11px;
+	color: var(--muted);
+	text-align: center;
+	line-height: 1.4;
 }
 
 .kanban-col-cost {
@@ -1199,6 +1211,10 @@ body {
 	align-items: start;
 }
 
+.settings-col-full {
+	grid-column: 1 / -1;
+}
+
 .settings-col-main {
 	min-width: 0;
 }
@@ -1516,6 +1532,7 @@ body {
 	font: inherit;
 	cursor: pointer;
 	transition: opacity 200ms;
+	outline: none;
 }
 
 .graph-track-ring {
@@ -2056,4 +2073,204 @@ body {
 	font-size: 11px;
 	color: var(--muted);
 	text-align: right;
+}
+
+/* ─── Workspace sidebar ──────────────────────────────── */
+.app-body {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+	overflow: hidden;
+}
+
+.workspace-sidebar {
+	width: 220px;
+	min-width: 180px;
+	max-width: 260px;
+	background: var(--bg-secondary, #1a1a2e);
+	border-right: 1px solid var(--border, #2a2a3e);
+	display: flex;
+	flex-direction: column;
+	overflow-y: auto;
+	flex-shrink: 0;
+}
+
+.workspace-sidebar-header {
+	padding: 12px 14px;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--text-muted, #666);
+	border-bottom: 1px solid var(--border, #2a2a3e);
+}
+
+.workspace-root-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	display: block;
+}
+
+.workspace-project-list {
+	list-style: none;
+	margin: 0;
+	padding: 6px 0;
+}
+
+.workspace-project-btn {
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 14px;
+	background: none;
+	border: none;
+	text-align: left;
+	cursor: pointer;
+	color: var(--text, #e0e0e0);
+	font-size: 13px;
+	transition: background 0.1s;
+}
+
+.workspace-project-btn:hover {
+	background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+}
+.workspace-project-btn.selected {
+	background: var(--bg-active, rgba(99, 102, 241, 0.15));
+	color: var(--accent, #6366f1);
+}
+.workspace-project-btn.uninit {
+	color: var(--text-muted, #666);
+}
+
+.project-status-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+.project-status-dot.running {
+	background: #22c55e;
+	box-shadow: 0 0 6px #22c55e;
+}
+.project-status-dot.idle {
+	background: #6366f1;
+}
+.project-status-dot.uninit {
+	background: #444;
+}
+
+.project-name {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.project-badge {
+	background: var(--accent, #6366f1);
+	color: #fff;
+	border-radius: 10px;
+	padding: 1px 6px;
+	font-size: 10px;
+}
+
+.project-init-form {
+	padding: 8px 14px 10px 28px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.project-init-goal {
+	background: var(--bg-input, #111);
+	border: 1px solid var(--border, #2a2a3e);
+	border-radius: 4px;
+	padding: 5px 8px;
+	color: var(--text, #e0e0e0);
+	font-size: 12px;
+}
+.project-init-actions {
+	display: flex;
+	gap: 6px;
+}
+.btn-init {
+	padding: 5px 12px;
+	background: var(--accent, #6366f1);
+	color: #fff;
+	border: none;
+	border-radius: 4px;
+	font-size: 12px;
+	cursor: pointer;
+}
+.btn-init:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+/* ─── Track Settings Editor ──────────────────────────── */
+.track-settings-editor {
+	margin-top: 24px;
+}
+.settings-loading {
+	color: var(--muted, #666);
+	font-size: 13px;
+	padding: 8px 0;
+}
+.track-settings-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--border, #2a2a3e);
+	flex-wrap: wrap;
+}
+.track-settings-id {
+	font-size: 13px;
+	font-weight: 500;
+	min-width: 100px;
+	color: var(--accent, #6366f1);
+}
+.track-settings-field {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.track-settings-field span {
+	font-size: 10px;
+	color: var(--text-muted, #666);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+.track-settings-input {
+	width: 90px;
+	background: var(--bg-input, #111);
+	border: 1px solid var(--border, #2a2a3e);
+	border-radius: 4px;
+	padding: 4px 8px;
+	color: var(--text, #e0e0e0);
+	font-size: 12px;
+}
+.btn-save-track {
+	padding: 5px 14px;
+	background: var(--accent, #6366f1);
+	color: #fff;
+	border: none;
+	border-radius: 4px;
+	font-size: 12px;
+	cursor: pointer;
+	margin-left: auto;
+}
+.btn-save-track:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+/* ─── Mobile: hide sidebar ───────────────────────────── */
+@media (max-width: 768px) {
+	.workspace-sidebar {
+		display: none;
+	}
+	.tab-content {
+		width: 100%;
+	}
 }

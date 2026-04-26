@@ -12,7 +12,6 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { trackDir } from "../src/config.js";
 import { isPaused, pauseTrack, resumeTrack } from "../src/orchestrator.js";
 import { initConductor } from "../src/track.js";
 

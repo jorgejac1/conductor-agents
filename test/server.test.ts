@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { swarmEvents } from "evalgate";
 import { trackTodoPath } from "../src/config.js";
 import { runTrack } from "../src/orchestrator.js";
 import { type ServerHandle, startServer } from "../src/server.js";
@@ -467,10 +468,9 @@ describe("server", () => {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ agentCmd: "echo", concurrency: 1 }),
 			});
-			assert.strictEqual(res.status, 200);
-			const body = (await res.json()) as { state: { workers: unknown[] } };
-			assert.ok(Array.isArray(body.state.workers), "should return workers array");
-			assert.ok(body.state.workers.length > 0, "should have at least one worker");
+			assert.strictEqual(res.status, 202);
+			const body = (await res.json()) as { accepted: boolean };
+			assert.strictEqual(body.accepted, true);
 		} finally {
 			handle?.stop();
 			rmSync(dir, { recursive: true, force: true });
@@ -586,7 +586,7 @@ describe("server", () => {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ agentCmd: "echo" }),
 			});
-			assert.strictEqual(res.status, 500);
+			assert.strictEqual(res.status, 404);
 		} finally {
 			handle?.stop();
 			rmSync(dir, { recursive: true, force: true });
@@ -624,6 +624,242 @@ describe("server", () => {
 				body: JSON.stringify({ workerId: failedWorker.id, agentCmd: "echo" }),
 			});
 			assert.strictEqual(retryRes.status, 200);
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// SSE /api/events — dedicated describe block
+// ---------------------------------------------------------------------------
+
+describe("SSE /api/events", () => {
+	it("should return text/event-stream content-type", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			handle = await startServer({ port: 0, cwd: dir });
+
+			const ac = new AbortController();
+			const timer = setTimeout(() => ac.abort(), 2000);
+			try {
+				const res = await fetch(`http://localhost:${handle.port}/api/events`, {
+					signal: ac.signal,
+				});
+				assert.ok(
+					res.headers.get("content-type")?.startsWith("text/event-stream"),
+					"content-type must be text/event-stream",
+				);
+				// Cancel the stream — we only needed the headers
+				await res.body?.cancel();
+			} finally {
+				clearTimeout(timer);
+			}
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("should send a heartbeat or data within 2 seconds", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			handle = await startServer({ port: 0, cwd: dir });
+
+			const ac = new AbortController();
+			const timer = setTimeout(() => ac.abort(), 2000);
+			try {
+				const res = await fetch(`http://localhost:${handle.port}/api/events`, {
+					signal: ac.signal,
+				});
+				assert.strictEqual(res.status, 200);
+
+				const reader = res.body?.getReader();
+				assert.ok(reader, "response body must be readable");
+
+				const { value } = await reader.read();
+				assert.ok(value && value.length > 0, "expected at least one byte from the SSE stream");
+
+				const text = new TextDecoder().decode(value);
+				// SSE heartbeats start with ":" and data lines start with "data:"
+				assert.ok(
+					text.startsWith(":") || text.includes("data:"),
+					`expected SSE heartbeat or data, got: ${JSON.stringify(text)}`,
+				);
+				reader.cancel();
+			} finally {
+				clearTimeout(timer);
+			}
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("should send initial tracks event to a second connecting client", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("SSE Track", "sse test", [], dir);
+			handle = await startServer({ port: 0, cwd: dir });
+
+			// Helper: connect and collect SSE data until the tracks event is found
+			async function collectUntilTracks(port: number): Promise<string> {
+				const ac = new AbortController();
+				const timer = setTimeout(() => ac.abort(), 3000);
+				try {
+					const res = await fetch(`http://localhost:${port}/api/events`, {
+						signal: ac.signal,
+					});
+					const reader = res.body?.getReader();
+					assert.ok(reader, "response body must be readable");
+					const decoder = new TextDecoder();
+					let sseData = "";
+					for (let i = 0; i < 30; i++) {
+						const { value, done } = await reader.read();
+						if (done) break;
+						sseData += decoder.decode(value);
+						if (sseData.includes('"type":"tracks"')) break;
+					}
+					reader.cancel();
+					return sseData;
+				} finally {
+					clearTimeout(timer);
+				}
+			}
+
+			// Connect first client and drain the initial event
+			const first = await collectUntilTracks(handle.port);
+			assert.ok(first.includes('"type":"tracks"'), "first client must receive tracks event");
+
+			// Connect a second independent client — should also receive tracks event
+			const second = await collectUntilTracks(handle.port);
+			assert.ok(second.includes('"type":"tracks"'), "second client must receive tracks event");
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("should keep the response body open (not immediately done)", async () => {
+		const dir = tmpDir();
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			handle = await startServer({ port: 0, cwd: dir });
+
+			const ac = new AbortController();
+			const timer = setTimeout(() => ac.abort(), 2000);
+			try {
+				const res = await fetch(`http://localhost:${handle.port}/api/events`, {
+					signal: ac.signal,
+				});
+				assert.strictEqual(res.status, 200);
+				assert.ok(res.body !== null, "response body must not be null");
+
+				const reader = res.body.getReader();
+				// Read the first chunk (heartbeat / initial event)
+				const { done: firstDone } = await reader.read();
+				// The stream must NOT be done after the first read — it should stay open
+				assert.strictEqual(firstDone, false, "SSE stream must not close after the first chunk");
+				reader.cancel();
+			} finally {
+				clearTimeout(timer);
+			}
+		} finally {
+			handle?.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	// Regression test: cost SSE event must include trackId.
+	// Before the fix, broadcastCost spread CostEvent as-is — CostEvent has no trackId,
+	// so the client always received trackId: undefined and fell back to "unknown",
+	// rendering the Activity bar chart label as "unkn".
+	it("cost SSE event includes trackId derived from the prior swarm state event", async () => {
+		const dir = tmpDir(true);
+		let handle: ServerHandle | undefined;
+		try {
+			initConductor(dir);
+			createTrack("Cost Track", "cost regression", [], dir);
+			const todoPath = trackTodoPath("cost-track", dir);
+			writeFileSync(todoPath, "- [ ] Cost task\n  - eval: `true`\n");
+
+			handle = await startServer({ port: 0, cwd: dir });
+
+			// Connect SSE client and collect events
+			const collected: string[] = [];
+			const ac = new AbortController();
+			const sseRes = await fetch(`http://localhost:${handle.port}/api/events`, {
+				signal: ac.signal,
+			});
+			const reader = sseRes.body?.getReader();
+			const decoder = new TextDecoder();
+
+			// Read events in the background
+			const readPromise = (async () => {
+				try {
+					while (true) {
+						const { value, done } = await reader.read();
+						if (done) break;
+						collected.push(decoder.decode(value));
+					}
+				} catch {
+					// aborted — expected
+				}
+			})();
+
+			// Emit a swarm state event so workerTrackMap gets populated for "cost-track"
+			swarmEvents.emit("state", {
+				id: "test-swarm",
+				ts: new Date().toISOString(),
+				todoPath,
+				workers: [
+					{
+						id: "worker-abc",
+						contractId: "c1",
+						contractTitle: "Cost task",
+						worktreePath: "/tmp/wt",
+						branch: "evalgate/branch",
+						status: "done",
+						logPath: "/tmp/log",
+					},
+				],
+			});
+
+			// Emit a cost event for the same workerId
+			swarmEvents.emit("cost", {
+				type: "cost",
+				workerId: "worker-abc",
+				contractId: "c1",
+				tokens: { input: 100, output: 50 },
+				estimatedUsd: 0.001,
+			});
+
+			// Give the server a tick to broadcast both events
+			await new Promise((r) => setTimeout(r, 100));
+			ac.abort();
+			await readPromise;
+
+			const allText = collected.join("");
+			const costLine = allText
+				.split("\n")
+				.find((l) => l.startsWith("data:") && l.includes('"type":"cost"'));
+
+			assert.ok(costLine, "should have received a cost SSE event");
+
+			const payload = JSON.parse(costLine.slice("data:".length)) as Record<string, unknown>;
+			assert.strictEqual(
+				payload.trackId,
+				"cost-track",
+				"cost SSE event must carry the correct trackId — regression for the 'unkn' bar chart label bug",
+			);
 		} finally {
 			handle?.stop();
 			rmSync(dir, { recursive: true, force: true });

@@ -123,6 +123,17 @@ export function validateConfig(raw: unknown): ConductorConfig {
 		if (typeof tg.chatId !== "number") throw new Error("config.telegram.chatId: must be a number");
 	}
 
+	// webhook (optional)
+	if (obj.webhook !== undefined) {
+		if (typeof obj.webhook !== "object" || obj.webhook === null) {
+			throw new Error("config.webhook: must be an object");
+		}
+		const wh = obj.webhook as Record<string, unknown>;
+		if (wh.secret !== undefined && typeof wh.secret !== "string") {
+			throw new Error("config.webhook.secret: must be a string");
+		}
+	}
+
 	return raw as unknown as ConductorConfig;
 }
 

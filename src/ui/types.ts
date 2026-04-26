@@ -162,3 +162,23 @@ export interface CostEvent {
 	estimatedUsd: number;
 	timestamp: number;
 }
+
+// ─── Workspace types ──────────────────────────────────────────────────────────
+
+export interface ProjectEntry {
+	id: string;
+	path: string;
+	name: string;
+	initialized: boolean;
+	runnersActive: number;
+	trackCount: number;
+	totalSpendUsd: number;
+	lastActivity: string | null;
+}
+
+export interface WorkspaceState {
+	root: string;
+	projects: ProjectEntry[];
+	/** True when root was auto-discovered as a parent workspace; false when it fell back to cwd. */
+	discovered: boolean;
+}

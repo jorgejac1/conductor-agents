@@ -16,6 +16,7 @@
  */
 
 import { cmdAdd } from "./cli/add.js";
+import { cmdDiagnose } from "./cli/diagnose.js";
 import { cmdDoctor } from "./cli/doctor.js";
 import { c, positionalArgs } from "./cli/helpers.js";
 import { cmdInit } from "./cli/init.js";
@@ -124,6 +125,9 @@ async function main(): Promise<void> {
 			break;
 		case "doctor":
 			exitCode = await cmdDoctor(args);
+			break;
+		case "diagnose":
+			exitCode = await cmdDiagnose(args);
 			break;
 		case "mcp": {
 			// startMcpServer runs indefinitely (readline keeps node alive).

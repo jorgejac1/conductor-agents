@@ -200,7 +200,12 @@ export function GraphView({ onShowHelp }: { onShowHelp?: () => void }) {
 			onKeyDown={(e) => {
 				if (e.key === "Escape") {
 					handleBgClick();
-				} else if (e.key === "r" && selectedTrackId) {
+				} else if (
+					e.key === "r" &&
+					selectedTrackId &&
+					selectedTrack &&
+					selectedTrack.trackStatus.todoTotal > 0
+				) {
 					void (async () => {
 						try {
 							await apiRunTrack(selectedTrackId);

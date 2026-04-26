@@ -434,6 +434,46 @@ export function diffPlan(cwd: string, draft: PlanDraft): PlanDiff {
 	return { added, removed, changed };
 }
 
+// ── Generate Plan Iterate ─────────────────────────────────────────────────────
+
+/**
+ * Reads the last run's failure logs for all tracks, builds a failure context,
+ * and re-prompts the planner to generate a revised plan draft.
+ *
+ * Returns true if failures were found and a new draft was generated; false if
+ * no failures exist to iterate on.
+ */
+export async function generatePlanIterate(cwd: string, agentCmd?: string): Promise<boolean> {
+	const { loadConfig, trackTodoPath } = await import("./config.js");
+	const { queryRuns, loadState } = await import("evalgate");
+
+	const config = loadConfig(cwd);
+	if (!config) throw new Error("No conductor config found.");
+
+	const failureLines: string[] = [];
+
+	for (const track of config.tracks) {
+		const todoPath = trackTodoPath(track.id, cwd);
+		const state = await loadState(todoPath);
+		if (!state) continue;
+
+		const failedWorkers = state.workers.filter((w) => w.status === "failed");
+		for (const w of failedWorkers) {
+			const record = queryRuns(todoPath, { contractId: w.contractId, passed: false, limit: 1 })[0];
+			const reason = w.failureKind ?? "unknown";
+			const detail = record ? ` — eval output: "${record.stdout.slice(0, 120)}"` : "";
+			failureLines.push(`  ${track.id}/${w.id.slice(0, 8)}: ${reason}${detail}`);
+		}
+	}
+
+	if (failureLines.length === 0) return false;
+
+	const goal = `Review these worker failures and revise the task breakdown to fix them:\n${failureLines.join("\n")}`;
+	const cmd = agentCmd ?? config.defaults.agentCmd ?? "claude";
+	await generatePlan(goal, cwd, cmd);
+	return true;
+}
+
 // ── Apply Plan ────────────────────────────────────────────────────────────────
 
 export async function applyPlan(cwd: string, dryRun: boolean): Promise<void> {

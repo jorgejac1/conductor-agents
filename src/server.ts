@@ -1,21 +1,35 @@
 /**
- * conductor web server — v0.1
+ * conductor web server — v3.0
  *
  * Routes:
- *   GET /                      → HTML dashboard
- *   GET /api/tracks            → list all tracks with status
- *   GET /api/tracks/:id/state  → swarm state for a track
- *   GET /api/events            → SSE stream (swarm state changes)
- *   POST /api/tracks/:id/run   → trigger swarm for a track
- *   POST /api/tracks/:id/retry → retry a worker { workerId }
+ *   GET /                              → HTML dashboard
+ *   GET /api/tracks                    → list all tracks with status
+ *   GET /api/tracks/:id/state          → swarm state for a track
+ *   GET /api/events                    → SSE stream (swarm state changes)
+ *   POST /api/tracks/:id/run           → trigger swarm for a track
+ *   POST /api/tracks/:id/retry         → retry a worker { workerId }
+ *   POST /api/tracks/:id/pause         → pause a track
+ *   POST /api/tracks/:id/resume        → resume a track
+ *   GET /api/tracks/:id/paused         → paused status
+ *   GET /api/tracks/:id/history        → run history
+ *   POST /api/tracks/:id/budget        → record budget usage
+ *   GET /api/tracks/:id/logs/:workerId → one-shot log fetch
+ *   GET /api/tracks/:id/logs/:workerId/stream → SSE log stream
+ *   POST /api/config/tracks/:id        → patch track config
+ *   GET /api/workspace                 → workspace root info
+ *   GET /api/workspace/projects        → list all projects
+ *   GET /api/workspace/projects/:id    → single project
+ *   POST /api/workspace/projects/:id/init        → init a project
+ *   POST /api/workspace/projects/:id/run/:trackId → run track in project
  */
 
+import { createHmac } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { BudgetExceededEvent, SwarmState } from "evalgate";
 import { queryRuns, reportTokenUsage, swarmEvents } from "evalgate";
-import { loadConfig, trackTodoPath } from "./config.js";
+import { loadConfig, saveConfig, trackTodoPath } from "./config.js";
 import {
 	getTrackCost,
 	getTrackState,
@@ -25,9 +39,11 @@ import {
 	retryTrackWorker,
 	runTrack,
 } from "./orchestrator.js";
+import { Router } from "./router.js";
 import { listTracks } from "./track.js";
 import type { TrackStatus } from "./types.js";
 import { htmlDashboard } from "./ui-bundle.js";
+import { registerWorkspaceRoutes } from "./workspace/api.js";
 
 export interface ServerOptions {
 	port?: number;
@@ -45,7 +61,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 
 	const sseClients = new Set<ServerResponse>();
 
+	// workerId → trackId, populated on every swarm state event so cost events can
+	// be enriched with the trackId that evalgate's CostEvent omits.
+	const workerTrackMap = new Map<string, string>();
+
 	function broadcastSwarm(state: SwarmState): void {
+		const trackId = state.todoPath.split("/").at(-2) ?? "";
+		for (const worker of state.workers) {
+			workerTrackMap.set(worker.id, trackId);
+		}
 		const data = `data: ${JSON.stringify({ type: "swarm", state })}\n\n`;
 		for (const res of sseClients) {
 			try {
@@ -55,7 +79,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			}
 		}
 		// Refresh sidebar counts (todoDone/todoTotal) after each worker transition.
-		// Debounced so rapid state changes don't flood clients.
 		scheduleBroadcastTracks();
 	}
 
@@ -85,9 +108,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 
 	swarmEvents.on("state", broadcastSwarm);
 
-	// Forward structured cost events (v0.12) to SSE clients
+	// Forward structured cost events (v0.12) to SSE clients, enriched with trackId
+	// (CostEvent from evalgate only carries workerId — look up the track from our map).
 	function broadcastCost(evt: unknown): void {
-		const data = `data: ${JSON.stringify({ type: "cost", ...(evt as object) })}\n\n`;
+		const costEvt = evt as { workerId?: string };
+		const trackId = (costEvt.workerId ? workerTrackMap.get(costEvt.workerId) : undefined) ?? "";
+		// trackId goes AFTER the spread so it wins even if evt somehow carries its own trackId field.
+		const data = `data: ${JSON.stringify({ type: "cost", ...(evt as object), trackId })}\n\n`;
 		for (const res of sseClients) {
 			try {
 				res.write(data);
@@ -95,7 +122,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 				sseClients.delete(res);
 			}
 		}
-		// Re-broadcast tracks so the kanban cost footer and stat bar refresh.
 		scheduleBroadcastTracks();
 	}
 	swarmEvents.on("cost", broadcastCost);
@@ -140,7 +166,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 	swarmEvents.on("worker-retry", broadcastWorkerRetry);
 
 	// Forward budget-exceeded events (v2.2/v2.3)
-	// Enrich with trackId derived from todoPath so UI clients keep working.
 	function broadcastBudgetExceeded(evt: BudgetExceededEvent): void {
 		const pathParts = (evt.todoPath ?? "").split(/[\\/]/);
 		const tracksIdx = pathParts.lastIndexOf("tracks");
@@ -154,7 +179,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 				sseClients.delete(res);
 			}
 		}
-		// Re-broadcast tracks so the kanban BUDGET badge reflects the new state.
 		scheduleBroadcastTracks();
 	}
 	swarmEvents.on("budget-exceeded", broadcastBudgetExceeded);
@@ -170,7 +194,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		}
 	}
 
+	/** Type-safe param accessor — returns empty string if param is undefined (should never happen when route matched). */
+	function param(params: { readonly [key: string]: string }, key: string): string {
+		return params[key] ?? "";
+	}
+
 	function readBody(req: IncomingMessage): Promise<string> {
+		// If body was already buffered (e.g. for HMAC check), return it directly.
+		const buffered = (req as IncomingMessage & { _body?: string })._body;
+		if (buffered !== undefined) return Promise.resolve(buffered);
 		return new Promise((resolve, reject) => {
 			const chunks: Buffer[] = [];
 			req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -179,430 +211,477 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		});
 	}
 
-	function parseLogsUrl(
-		url: string,
-	): { trackId: string; workerId: string; stream: boolean } | null {
-		// /api/tracks/:id/logs/:workerId          (one-shot)
-		// /api/tracks/:id/logs/:workerId/stream   (SSE stream)
-		const prefix = "/api/tracks/";
-		if (!url.startsWith(prefix)) return null;
-		const rest = url.slice(prefix.length);
-		const logsIdx = rest.indexOf("/logs/");
-		if (logsIdx === -1) return null;
-		const trackId = rest.slice(0, logsIdx);
-		let workerId = rest.slice(logsIdx + "/logs/".length);
-		const stream = workerId.endsWith("/stream");
-		if (stream) workerId = workerId.slice(0, -"/stream".length);
-		if (!trackId || !workerId) return null;
-		return { trackId, workerId, stream };
-	}
+	const router = new Router();
 
-	function trackIdFromUrl(url: string, suffix: string): string | null {
-		// /api/tracks/<id>/state or /api/tracks/<id>/run etc.
-		const prefix = "/api/tracks/";
-		if (!url.startsWith(prefix)) return null;
-		const rest = url.slice(prefix.length);
-		const idx = rest.indexOf(`/${suffix}`);
-		if (idx === -1) return null;
-		return rest.slice(0, idx) || null;
-	}
+	// GET /
+	router.get("/", (_req, res) => {
+		res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+		res.end(htmlDashboard());
+	});
+
+	// GET /api/telegram-status
+	router.get("/api/telegram-status", (_req, res) => {
+		const config = loadConfig(cwd);
+		const configured = Boolean(config?.telegram?.token);
+		res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+		res.end(JSON.stringify({ configured }));
+	});
+
+	// GET /api/tracks
+	router.get("/api/tracks", (_req, res) => {
+		listTracks(cwd)
+			.then((tracks) => {
+				res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+				res.end(JSON.stringify(tracks));
+			})
+			.catch((err: unknown) => {
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: String(err) }));
+			});
+	});
+
+	// GET /api/tracks/:id/state
+	router.get("/api/tracks/:id/state", (_req, res, params) => {
+		getTrackState(param(params, "id"), cwd)
+			.then((state) => {
+				res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+				res.end(JSON.stringify(state ?? null));
+			})
+			.catch((err: unknown) => {
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: String(err) }));
+			});
+	});
+
+	// GET /api/tracks/:id/cost
+	router.get("/api/tracks/:id/cost", (_req, res, params) => {
+		try {
+			const summary = getTrackCost(param(params, "id"), cwd);
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+			res.end(JSON.stringify(summary));
+		} catch (err: unknown) {
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: String(err) }));
+		}
+	});
+
+	// GET /api/events
+	router.get("/api/events", (req, res) => {
+		res.writeHead(200, {
+			"Content-Type": "text/event-stream",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+			"X-Accel-Buffering": "no",
+		});
+		res.write(": connected\n\n");
+		sseClients.add(res);
+
+		listTracks(cwd)
+			.then((tracks) => {
+				broadcastTracks(tracks);
+			})
+			.catch(() => {
+				/* ignore */
+			});
+
+		const keepalive = setInterval(() => {
+			try {
+				res.write(": ping\n\n");
+			} catch {
+				/* client gone */
+			}
+		}, 20_000);
+
+		req.on("close", () => {
+			clearInterval(keepalive);
+			sseClients.delete(res);
+		});
+	});
+
+	// POST /api/tracks/:id/run
+	router.post("/api/tracks/:id/run", async (req, res, params) => {
+		readBody(req)
+			.then((body) => {
+				let parsed: { concurrency?: number; agentCmd?: string; resume?: boolean } = {};
+				try {
+					parsed = JSON.parse(body) as typeof parsed;
+				} catch {
+					/* use defaults */
+				}
+				const trackId = param(params, "id");
+				// Validate track exists before accepting.
+				const config = loadConfig(cwd);
+				if (!config?.tracks.find((t) => t.id === trackId)) {
+					res.writeHead(404, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: `Track "${trackId}" not found` }));
+					return;
+				}
+				// Fire-and-forget — swarm progress arrives via SSE.
+				runTrack(trackId, { ...parsed, cwd })
+					.then(() => {
+						scheduleBroadcastTracks();
+					})
+					.catch(() => {
+						scheduleBroadcastTracks();
+					});
+				res.writeHead(202, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ accepted: true }));
+			})
+			.catch((err: unknown) => {
+				const message = err instanceof Error ? err.message : String(err);
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: message }));
+			});
+	});
+
+	// GET /api/tracks/:id/logs/:workerId
+	router.get("/api/tracks/:id/logs/:workerId", (_req, res, params) => {
+		getTrackState(param(params, "id"), cwd)
+			.then((state) => {
+				if (!state) {
+					res.writeHead(404, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: `No state for track "${param(params, "id")}"` }));
+					return;
+				}
+				const worker = state.workers.find((w) => w.id.startsWith(param(params, "workerId")));
+				if (!worker) {
+					res.writeHead(404, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: `Worker "${param(params, "workerId")}" not found` }));
+					return;
+				}
+				if (!existsSync(worker.logPath)) {
+					res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+					res.end("(no output yet)");
+					return;
+				}
+				const content = readFileSync(worker.logPath, "utf8");
+				res.writeHead(200, {
+					"Content-Type": "text/plain; charset=utf-8",
+					"Cache-Control": "no-store",
+				});
+				res.end(content);
+			})
+			.catch((err: unknown) => {
+				const message = err instanceof Error ? err.message : String(err);
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: message }));
+			});
+	});
+
+	// GET /api/tracks/:id/logs/:workerId/stream
+	router.get("/api/tracks/:id/logs/:workerId/stream", (req, res, params) => {
+		getTrackState(param(params, "id"), cwd)
+			.then((state) => {
+				if (!state) {
+					res.writeHead(404, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: `No state for track "${param(params, "id")}"` }));
+					return;
+				}
+				const worker = state.workers.find((w) => w.id.startsWith(param(params, "workerId")));
+				if (!worker) {
+					res.writeHead(404, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: `Worker "${param(params, "workerId")}" not found` }));
+					return;
+				}
+
+				res.writeHead(200, {
+					"Content-Type": "text/event-stream",
+					"Cache-Control": "no-cache",
+					Connection: "keep-alive",
+					"X-Accel-Buffering": "no",
+				});
+
+				// Send existing content immediately.
+				let offset = 0;
+				if (existsSync(worker.logPath)) {
+					const initial = readFileSync(worker.logPath, "utf8");
+					if (initial) {
+						res.write(`data: ${JSON.stringify(initial)}\n\n`);
+						offset = Buffer.byteLength(initial, "utf8");
+					}
+				}
+
+				// If worker is already in a terminal state, send done and close.
+				const isTerminal = worker.status === "done" || worker.status === "failed";
+				if (isTerminal) {
+					res.write("event: done\ndata: {}\n\n");
+					res.end();
+					return;
+				}
+
+				// Poll for new log content every 500ms.
+				const pollInterval = setInterval(() => {
+					try {
+						if (!existsSync(worker.logPath)) return;
+						const full = readFileSync(worker.logPath);
+						if (full.length > offset) {
+							const chunk = full.subarray(offset).toString("utf8");
+							offset = full.length;
+							res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+						}
+					} catch {
+						/* log may not exist yet */
+					}
+				}, 500);
+
+				const workerId_ = worker.id;
+
+				function onWorkerEvent(w: { id: string; status: string }) {
+					if (w.id !== workerId_) return;
+					if (w.status === "done" || w.status === "failed") {
+						clearInterval(pollInterval);
+						swarmEvents.off("worker", onWorkerEvent);
+						try {
+							res.write("event: done\ndata: {}\n\n");
+							res.end();
+						} catch {
+							/* client already gone */
+						}
+					}
+				}
+				swarmEvents.on("worker", onWorkerEvent);
+
+				req.on("close", () => {
+					clearInterval(pollInterval);
+					swarmEvents.off("worker", onWorkerEvent);
+				});
+			})
+			.catch((err: unknown) => {
+				const message = err instanceof Error ? err.message : String(err);
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: message }));
+			});
+	});
+
+	// POST /api/tracks/:id/retry
+	router.post("/api/tracks/:id/retry", async (req, res, params) => {
+		readBody(req)
+			.then((body) => {
+				let parsed: { workerId?: string; agentCmd?: string } = {};
+				try {
+					parsed = JSON.parse(body) as typeof parsed;
+				} catch {
+					/* use defaults */
+				}
+				if (!parsed.workerId) {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "workerId is required" }));
+					return Promise.resolve();
+				}
+				const retryOpts: { agentCmd?: string; cwd?: string } = { cwd };
+				if (parsed.agentCmd !== undefined) retryOpts.agentCmd = parsed.agentCmd;
+				return retryTrackWorker(param(params, "id"), parsed.workerId, retryOpts).then(() => {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ ok: true }));
+				});
+			})
+			.catch((err: unknown) => {
+				const message = err instanceof Error ? err.message : String(err);
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: message }));
+			});
+	});
+
+	// POST /api/tracks/:id/pause
+	router.post("/api/tracks/:id/pause", (_req, res, params) => {
+		const paused = pauseTrack(param(params, "id"), cwd);
+		broadcastEvent({ type: "track-paused", trackId: param(params, "id") });
+		scheduleBroadcastTracks();
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(JSON.stringify({ paused }));
+	});
+
+	// POST /api/tracks/:id/resume
+	router.post("/api/tracks/:id/resume", async (req, res, params) => {
+		readBody(req)
+			.then((body) => {
+				let parsed: { concurrency?: number; agentCmd?: string } = {};
+				try {
+					parsed = JSON.parse(body) as typeof parsed;
+				} catch {
+					/* use defaults */
+				}
+				const trackId = param(params, "id");
+				// Fire-and-forget — swarm progress arrives via SSE.
+				resumeTrack(trackId, { ...parsed, cwd })
+					.then(() => {
+						scheduleBroadcastTracks();
+					})
+					.catch(() => {
+						scheduleBroadcastTracks();
+					});
+				broadcastEvent({ type: "track-resumed", trackId });
+				res.writeHead(202, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ accepted: true }));
+			})
+			.catch((err: unknown) => {
+				const message = err instanceof Error ? err.message : String(err);
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: message }));
+			});
+	});
+
+	// GET /api/tracks/:id/paused
+	router.get("/api/tracks/:id/paused", (_req, res, params) => {
+		res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+		res.end(JSON.stringify({ paused: isPaused(param(params, "id"), cwd) }));
+	});
+
+	// GET /api/tracks/:id/history
+	router.get("/api/tracks/:id/history", (req, res, params) => {
+		const todoPath = trackTodoPath(param(params, "id"), cwd);
+		const qs = new URL(req.url ?? "/", "http://x").searchParams;
+		const limit = Number(qs.get("limit") ?? "100") || 100;
+		const offset = Number(qs.get("offset") ?? "0") || 0;
+		const from = qs.get("from") ?? undefined;
+		const to = qs.get("to") ?? undefined;
+		const resultFilter = qs.get("result");
+		const queryOpts: Parameters<typeof queryRuns>[1] = { limit, offset };
+		if (from !== undefined) queryOpts.from = from;
+		if (to !== undefined) queryOpts.to = to;
+		if (resultFilter === "pass") queryOpts.passed = true;
+		if (resultFilter === "fail") queryOpts.passed = false;
+		const runs = queryRuns(todoPath, queryOpts);
+		res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+		res.end(JSON.stringify(runs));
+	});
+
+	// POST /api/tracks/:id/budget
+	router.post("/api/tracks/:id/budget", async (req, res, params) => {
+		const body = await readBody(req);
+		let parsed: {
+			contractId?: string;
+			tokens?: number;
+			inputTokens?: number;
+			outputTokens?: number;
+			workerId?: string;
+		} = {};
+		try {
+			parsed = JSON.parse(body);
+		} catch {
+			/* use defaults */
+		}
+		if (!parsed.contractId || typeof parsed.tokens !== "number") {
+			res.writeHead(400, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "contractId and tokens (number) are required" }));
+			return;
+		}
+		const todoPath = trackTodoPath(param(params, "id"), cwd);
+		const budgetOpts: { inputTokens?: number; outputTokens?: number; workerId?: string } = {};
+		if (parsed.workerId) budgetOpts.workerId = parsed.workerId;
+		if (typeof parsed.inputTokens === "number") budgetOpts.inputTokens = parsed.inputTokens;
+		if (typeof parsed.outputTokens === "number") budgetOpts.outputTokens = parsed.outputTokens;
+		const record = reportTokenUsage(
+			todoPath,
+			parsed.contractId,
+			parsed.tokens,
+			undefined,
+			budgetOpts,
+		);
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(JSON.stringify(record));
+	});
+
+	// GET /api/config
+	router.get("/api/config", (_req, res) => {
+		const cfg = loadConfig(cwd);
+		res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+		res.end(
+			JSON.stringify(cfg ?? { tracks: [], defaults: { concurrency: 1, agentCmd: "claude" } }),
+		);
+	});
+
+	// POST /api/config/tracks/:id — patch a track's settings
+	router.post("/api/config/tracks/:id", async (req, res, params) => {
+		const body = await readBody(req);
+		let patch: Partial<import("./types.js").Track> = {};
+		try {
+			patch = JSON.parse(body);
+		} catch {
+			/* ignore */
+		}
+		const config = loadConfig(cwd);
+		if (!config) {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "no config" }));
+			return;
+		}
+		const idx = config.tracks.findIndex((t) => t.id === param(params, "id"));
+		if (idx === -1) {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "track not found" }));
+			return;
+		}
+		const existingTrack = config.tracks[idx];
+		if (!existingTrack) {
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "track index out of bounds" }));
+			return;
+		}
+		config.tracks[idx] = { ...existingTrack, ...patch, id: existingTrack.id };
+		saveConfig(config, cwd);
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(JSON.stringify({ ok: true }));
+	});
+
+	// POST /api/webhook — trigger all tracks (after HMAC check passes upstream)
+	router.post("/api/webhook", async (_req, res) => {
+		const cfg = loadConfig(cwd);
+		const trackIds = cfg?.tracks.map((t) => t.id) ?? [];
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(JSON.stringify({ triggered: trackIds }));
+	});
+
+	// GET /api/version
+	router.get("/api/version", async (_req, res) => {
+		const { createRequire } = await import("node:module");
+		const req2 = createRequire(import.meta.url);
+		const conductorVersion = (req2("../package.json") as { version: string }).version;
+		let evalgateVersion = "unknown";
+		try {
+			evalgateVersion = (req2("evalgate/package.json") as { version: string }).version;
+		} catch {
+			/* evalgate package.json not accessible */
+		}
+		res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+		res.end(JSON.stringify({ conductor: conductorVersion, evalgate: evalgateVersion }));
+	});
+
+	// Register workspace routes
+	const cleanupWorkspace = registerWorkspaceRoutes(router, cwd, sseClients);
 
 	async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		const url = req.url ?? "/";
-		const method = req.method ?? "GET";
 
-		if (url === "/" || url === "/index.html") {
+		// Also handle /index.html as root
+		if (url === "/index.html") {
 			res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
 			res.end(htmlDashboard());
 			return;
 		}
 
-		if (url === "/api/telegram-status" && method === "GET") {
-			const config = loadConfig(cwd);
-			const configured = Boolean(config?.telegram?.token);
-			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-			res.end(JSON.stringify({ configured }));
-			return;
-		}
-
-		if (url === "/api/tracks" && method === "GET") {
-			listTracks(cwd)
-				.then((tracks) => {
-					res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-					res.end(JSON.stringify(tracks));
-				})
-				.catch((err: unknown) => {
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: String(err) }));
-				});
-			return;
-		}
-
-		const stateId = trackIdFromUrl(url, "state");
-		if (stateId && method === "GET") {
-			getTrackState(stateId, cwd)
-				.then((state) => {
-					res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-					res.end(JSON.stringify(state ?? null));
-				})
-				.catch((err: unknown) => {
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: String(err) }));
-				});
-			return;
-		}
-
-		const costId = trackIdFromUrl(url, "cost");
-		if (costId && method === "GET") {
-			try {
-				const summary = getTrackCost(costId, cwd);
-				res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-				res.end(JSON.stringify(summary));
-			} catch (err: unknown) {
-				res.writeHead(500, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ error: String(err) }));
-			}
-			return;
-		}
-
-		if (url === "/api/events" && method === "GET") {
-			res.writeHead(200, {
-				"Content-Type": "text/event-stream",
-				"Cache-Control": "no-cache",
-				Connection: "keep-alive",
-				"X-Accel-Buffering": "no",
-			});
-			res.write(": connected\n\n");
-			sseClients.add(res);
-
-			// Send current track list immediately
-			listTracks(cwd)
-				.then((tracks) => {
-					broadcastTracks(tracks);
-				})
-				.catch(() => {
-					/* ignore */
-				});
-
-			const keepalive = setInterval(() => {
-				try {
-					res.write(": ping\n\n");
-				} catch {
-					/* client gone */
-				}
-			}, 20_000);
-
-			req.on("close", () => {
-				clearInterval(keepalive);
-				sseClients.delete(res);
-			});
-			return;
-		}
-
-		const runId = trackIdFromUrl(url, "run");
-		if (runId && method === "POST") {
-			readBody(req)
-				.then((body) => {
-					let parsed: { concurrency?: number; agentCmd?: string; resume?: boolean } = {};
-					try {
-						parsed = JSON.parse(body) as typeof parsed;
-					} catch {
-						/* use defaults */
-					}
-					return runTrack(runId, { ...parsed, cwd });
-				})
-				.then((result) => {
-					res.writeHead(200, { "Content-Type": "application/json" });
-					res.end(JSON.stringify(result));
-				})
-				.catch((err: unknown) => {
-					const message = err instanceof Error ? err.message : String(err);
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: message }));
-				});
-			return;
-		}
-
-		const logsRoute = parseLogsUrl(url);
-		if (logsRoute && method === "GET") {
-			const { trackId, workerId, stream } = logsRoute;
-
-			if (stream) {
-				// SSE streaming log endpoint — tails the log file while the worker runs.
-				getTrackState(trackId, cwd)
-					.then((state) => {
-						if (!state) {
-							res.writeHead(404, { "Content-Type": "application/json" });
-							res.end(JSON.stringify({ error: `No state for track "${trackId}"` }));
-							return;
-						}
-						const worker = state.workers.find((w) => w.id.startsWith(workerId));
-						if (!worker) {
-							res.writeHead(404, { "Content-Type": "application/json" });
-							res.end(JSON.stringify({ error: `Worker "${workerId}" not found` }));
-							return;
-						}
-
-						res.writeHead(200, {
-							"Content-Type": "text/event-stream",
-							"Cache-Control": "no-cache",
-							Connection: "keep-alive",
-							"X-Accel-Buffering": "no",
-						});
-
-						// Send existing content immediately.
-						let offset = 0;
-						if (existsSync(worker.logPath)) {
-							const initial = readFileSync(worker.logPath, "utf8");
-							if (initial) {
-								res.write(`data: ${JSON.stringify(initial)}\n\n`);
-								offset = Buffer.byteLength(initial, "utf8");
-							}
-						}
-
-						// If worker is already in a terminal state, send done and close.
-						const isTerminal = worker.status === "done" || worker.status === "failed";
-						if (isTerminal) {
-							res.write("event: done\ndata: {}\n\n");
-							res.end();
-							return;
-						}
-
-						// Poll for new log content every 500ms (matches CLI follow-mode).
-						const pollInterval = setInterval(() => {
-							try {
-								if (!existsSync(worker.logPath)) return;
-								const full = readFileSync(worker.logPath);
-								if (full.length > offset) {
-									const chunk = full.subarray(offset).toString("utf8");
-									offset = full.length;
-									res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-								}
-							} catch {
-								/* log may not exist yet */
-							}
-						}, 500);
-
-						// Capture id for use in nested callback (TS can't narrow through closures).
-						const workerId_ = worker.id;
-
-						// Watch for worker reaching terminal state via swarmEvents.
-						function onWorkerEvent(w: { id: string; status: string }) {
-							if (w.id !== workerId_) return;
-							if (w.status === "done" || w.status === "failed") {
-								clearInterval(pollInterval);
-								swarmEvents.off("worker", onWorkerEvent);
-								try {
-									res.write("event: done\ndata: {}\n\n");
-									res.end();
-								} catch {
-									/* client already gone */
-								}
-							}
-						}
-						swarmEvents.on("worker", onWorkerEvent);
-
-						req.on("close", () => {
-							clearInterval(pollInterval);
-							swarmEvents.off("worker", onWorkerEvent);
-						});
-					})
-					.catch((err: unknown) => {
-						const message = err instanceof Error ? err.message : String(err);
-						res.writeHead(500, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: message }));
-					});
-				return;
-			}
-
-			// One-shot log fetch
-			getTrackState(trackId, cwd)
-				.then((state) => {
-					if (!state) {
-						res.writeHead(404, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: `No state for track "${trackId}"` }));
-						return;
-					}
-					const worker = state.workers.find((w) => w.id.startsWith(workerId));
-					if (!worker) {
-						res.writeHead(404, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: `Worker "${workerId}" not found` }));
-						return;
-					}
-					if (!existsSync(worker.logPath)) {
-						res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-						res.end("(no output yet)");
-						return;
-					}
-					const content = readFileSync(worker.logPath, "utf8");
-					res.writeHead(200, {
-						"Content-Type": "text/plain; charset=utf-8",
-						"Cache-Control": "no-store",
-					});
-					res.end(content);
-				})
-				.catch((err: unknown) => {
-					const message = err instanceof Error ? err.message : String(err);
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: message }));
-				});
-			return;
-		}
-
-		const retryId = trackIdFromUrl(url, "retry");
-		if (retryId && method === "POST") {
-			readBody(req)
-				.then((body) => {
-					let parsed: { workerId?: string; agentCmd?: string } = {};
-					try {
-						parsed = JSON.parse(body) as typeof parsed;
-					} catch {
-						/* use defaults */
-					}
-					if (!parsed.workerId) {
-						res.writeHead(400, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: "workerId is required" }));
-						return Promise.resolve();
-					}
-					const retryOpts: { agentCmd?: string; cwd?: string } = { cwd };
-					if (parsed.agentCmd !== undefined) retryOpts.agentCmd = parsed.agentCmd;
-					return retryTrackWorker(retryId, parsed.workerId, retryOpts).then(() => {
-						res.writeHead(200, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ ok: true }));
-					});
-				})
-				.catch((err: unknown) => {
-					const message = err instanceof Error ? err.message : String(err);
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: message }));
-				});
-			return;
-		}
-
-		const pauseId = trackIdFromUrl(url, "pause");
-		if (pauseId && method === "POST") {
-			const paused = pauseTrack(pauseId, cwd);
-			broadcastEvent({ type: "track-paused", trackId: pauseId });
-			scheduleBroadcastTracks();
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ paused }));
-			return;
-		}
-
-		const resumeId = trackIdFromUrl(url, "resume");
-		if (resumeId && method === "POST") {
-			readBody(req)
-				.then((body) => {
-					let parsed: { concurrency?: number; agentCmd?: string } = {};
-					try {
-						parsed = JSON.parse(body) as typeof parsed;
-					} catch {
-						/* use defaults */
-					}
-					return resumeTrack(resumeId, { ...parsed, cwd });
-				})
-				.then((result) => {
-					broadcastEvent({ type: "track-resumed", trackId: resumeId });
-					scheduleBroadcastTracks();
-					res.writeHead(200, { "Content-Type": "application/json" });
-					res.end(JSON.stringify(result));
-				})
-				.catch((err: unknown) => {
-					const message = err instanceof Error ? err.message : String(err);
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: message }));
-				});
-			return;
-		}
-
-		const pausedId = trackIdFromUrl(url, "paused");
-		if (pausedId && method === "GET") {
-			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-			res.end(JSON.stringify({ paused: isPaused(pausedId, cwd) }));
-			return;
-		}
-
-		const historyId = trackIdFromUrl(url, "history");
-		if (historyId && method === "GET") {
-			const todoPath = trackTodoPath(historyId, cwd);
-			const qs = new URL(url, "http://x").searchParams;
-			const limit = Number(qs.get("limit") ?? "100") || 100;
-			const offset = Number(qs.get("offset") ?? "0") || 0;
-			const from = qs.get("from") ?? undefined;
-			const to = qs.get("to") ?? undefined;
-			const resultFilter = qs.get("result");
-			const queryOpts: Parameters<typeof queryRuns>[1] = { limit, offset };
-			if (from !== undefined) queryOpts.from = from;
-			if (to !== undefined) queryOpts.to = to;
-			if (resultFilter === "pass") queryOpts.passed = true;
-			if (resultFilter === "fail") queryOpts.passed = false;
-			const runs = queryRuns(todoPath, queryOpts);
-			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-			res.end(JSON.stringify(runs));
-			return;
-		}
-
-		const budgetId = trackIdFromUrl(url, "budget");
-		if (budgetId && method === "POST") {
-			const body = await readBody(req);
-			let parsed: {
-				contractId?: string;
-				tokens?: number;
-				inputTokens?: number;
-				outputTokens?: number;
-				workerId?: string;
-			} = {};
-			try {
-				parsed = JSON.parse(body);
-			} catch {
-				/* use defaults */
-			}
-			if (!parsed.contractId || typeof parsed.tokens !== "number") {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ error: "contractId and tokens (number) are required" }));
-				return;
-			}
-			const todoPath = trackTodoPath(budgetId, cwd);
-			const budgetOpts: { inputTokens?: number; outputTokens?: number; workerId?: string } = {};
-			if (parsed.workerId) budgetOpts.workerId = parsed.workerId;
-			if (typeof parsed.inputTokens === "number") budgetOpts.inputTokens = parsed.inputTokens;
-			if (typeof parsed.outputTokens === "number") budgetOpts.outputTokens = parsed.outputTokens;
-			const record = reportTokenUsage(
-				todoPath,
-				parsed.contractId,
-				parsed.tokens,
-				undefined,
-				budgetOpts,
-			);
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(JSON.stringify(record));
-			return;
-		}
-
-		if (url === "/api/config" && method === "GET") {
+		// Webhook HMAC validation (only for /api/webhook POST)
+		if (url.startsWith("/api/webhook") && req.method === "POST") {
 			const cfg = loadConfig(cwd);
-			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-			res.end(JSON.stringify(cfg ?? {}));
-			return;
-		}
-
-		if (url === "/api/version" && method === "GET") {
-			const { createRequire } = await import("node:module");
-			const req2 = createRequire(import.meta.url);
-			const conductorVersion = (req2("../package.json") as { version: string }).version;
-			let evalgateVersion = "unknown";
-			try {
-				evalgateVersion = (req2("evalgate/package.json") as { version: string }).version;
-			} catch {
-				/* evalgate package.json not accessible */
+			if (cfg?.webhook?.secret) {
+				const body = await readBody(req);
+				const sig = req.headers["x-hub-signature-256"] as string | undefined;
+				const expected = `sha256=${createHmac("sha256", cfg.webhook.secret).update(body).digest("hex")}`;
+				if (!sig || sig !== expected) {
+					res.writeHead(401, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "Invalid webhook signature" }));
+					return;
+				}
+				// Re-inject body for downstream handler
+				(req as IncomingMessage & { _body?: string })._body = body;
 			}
-			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-			res.end(JSON.stringify({ conductor: conductorVersion, evalgate: evalgateVersion }));
-			return;
 		}
 
-		res.writeHead(404, { "Content-Type": "text/plain" });
-		res.end("not found");
+		const matched = await router.handle(req, res);
+		if (!matched) {
+			res.writeHead(404, { "Content-Type": "text/plain" });
+			res.end("not found");
+		}
 	}
 
 	const server = createServer((req, res) => {
@@ -626,6 +705,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 			swarmEvents.off("worker-start", broadcastWorkerStart);
 			swarmEvents.off("worker-retry", broadcastWorkerRetry);
 			swarmEvents.off("budget-exceeded", broadcastBudgetExceeded);
+			cleanupWorkspace();
 			for (const res of sseClients) {
 				try {
 					res.end();

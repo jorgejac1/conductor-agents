@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { buildContextSnapshot, formatTasksAsTodo, parsePlanDraft } from "../src/planner.js";
+import {
+	applyPlan,
+	buildContextSnapshot,
+	formatTasksAsTodo,
+	parsePlanDraft,
+} from "../src/planner.js";
+import { initConductor } from "../src/track.js";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -291,6 +297,190 @@ describe("buildContextSnapshot", () => {
 			assert.ok(!snapshot.includes("node_modules"), "Should not include node_modules");
 			assert.ok(!snapshot.includes(".git/"), "Should not include .git/ directory");
 			assert.ok(snapshot.includes("src/app.ts"), "Should include src/app.ts");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// applyPlan
+// ---------------------------------------------------------------------------
+
+// A minimal valid plan-draft.md using the parsePlanDraft format confirmed by
+// existing fixture tests above.
+const VALID_APPLY_DRAFT = `# Conductor Plan: Apply plan test
+Generated: 2026-04-25T00:00:00.000Z
+
+## Track: auth-service
+Description: Authentication service
+Files: src/auth/**
+Concurrency: 2
+
+### Context
+This track owns authentication logic. Implements JWT signing and login endpoint.
+Do NOT touch other packages.
+
+### Tasks
+- [ ] Implement JWT signing
+  - Add jwt.sign() wrapper
+  eval: \`test -f src/auth/jwt.ts\`
+
+- [ ] Add login endpoint
+  - POST /auth/login
+  eval: \`true\`
+
+`;
+
+const MULTI_APPLY_DRAFT = `# Conductor Plan: Multi track apply
+Generated: 2026-04-25T00:00:00.000Z
+
+## Track: frontend
+Description: React frontend
+Files: src/ui/**
+Concurrency: 1
+
+### Context
+Owns all UI code.
+
+### Tasks
+- [ ] Build login form
+  eval: \`true\`
+
+## Track: backend
+Description: Node.js API
+Files: src/api/**
+Concurrency: 2
+
+### Context
+Owns all API code.
+
+### Tasks
+- [ ] Add auth endpoint
+  eval: \`true\`
+
+`;
+
+describe("applyPlan", () => {
+	it("should throw when no plan-draft.md exists", async () => {
+		const dir = makeTmpDir();
+		try {
+			initConductor(dir);
+			await assert.rejects(
+				() => applyPlan(dir, false),
+				/No plan draft found/,
+				"should throw with a helpful message when draft is missing",
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("should throw when plan-draft.md is empty and has no tasks", async () => {
+		const dir = makeTmpDir();
+		try {
+			initConductor(dir);
+			// Write a draft with a track but zero tasks — parsePlanDraft returns tasks: []
+			// and applyPlan guards: every track has zero tasks → invalid
+			const emptyTaskDraft = `# Conductor Plan: Empty tasks
+Generated: 2026-04-25T00:00:00.000Z
+
+## Track: empty-track
+Description: No tasks here
+Files: src/**
+Concurrency: 1
+
+### Context
+Empty track.
+
+### Tasks
+
+`;
+			writeFileSync(join(dir, ".conductor", "plan-draft.md"), emptyTaskDraft, "utf8");
+			await assert.rejects(
+				() => applyPlan(dir, false),
+				/invalid or empty/,
+				"should throw when all tracks have zero tasks",
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("should not create track directories when dryRun is true", async () => {
+		const dir = makeTmpDir();
+		try {
+			initConductor(dir);
+			writeFileSync(join(dir, ".conductor", "plan-draft.md"), VALID_APPLY_DRAFT, "utf8");
+
+			await applyPlan(dir, true);
+
+			// Directory must NOT have been created for the track
+			const trackDir = join(dir, ".conductor", "tracks", "auth-service");
+			assert.ok(!existsSync(trackDir), "dryRun: true must not create the track directory");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("should create todo.md and CONTEXT.md when dryRun is false", async () => {
+		const dir = makeTmpDir();
+		try {
+			initConductor(dir);
+			writeFileSync(join(dir, ".conductor", "plan-draft.md"), VALID_APPLY_DRAFT, "utf8");
+
+			await applyPlan(dir, false);
+
+			const trackDir = join(dir, ".conductor", "tracks", "auth-service");
+			assert.ok(existsSync(join(trackDir, "todo.md")), "todo.md must be created");
+			assert.ok(existsSync(join(trackDir, "CONTEXT.md")), "CONTEXT.md must be created");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("should overwrite todo.md and CONTEXT.md on an existing track without throwing", async () => {
+		const dir = makeTmpDir();
+		try {
+			initConductor(dir);
+			writeFileSync(join(dir, ".conductor", "plan-draft.md"), VALID_APPLY_DRAFT, "utf8");
+
+			// First apply — creates the track
+			await applyPlan(dir, false);
+
+			// Write a sentinel so we can confirm overwrite
+			const trackDir = join(dir, ".conductor", "tracks", "auth-service");
+			writeFileSync(join(trackDir, "todo.md"), "# old content", "utf8");
+
+			// Second apply — track already exists, should overwrite instead of throwing
+			await applyPlan(dir, false);
+
+			// The old sentinel content must be gone (overwritten with real tasks)
+			const { readFileSync } = await import("node:fs");
+			const todo = readFileSync(join(trackDir, "todo.md"), "utf8");
+			assert.ok(
+				!todo.includes("# old content"),
+				"todo.md should be overwritten, not left with old content",
+			);
+			assert.ok(todo.includes("Implement JWT signing"), "todo.md should contain the plan tasks");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("should create all tracks when the plan contains multiple tracks", async () => {
+		const dir = makeTmpDir();
+		try {
+			initConductor(dir);
+			writeFileSync(join(dir, ".conductor", "plan-draft.md"), MULTI_APPLY_DRAFT, "utf8");
+
+			await applyPlan(dir, false);
+
+			const frontendTodo = join(dir, ".conductor", "tracks", "frontend", "todo.md");
+			const backendTodo = join(dir, ".conductor", "tracks", "backend", "todo.md");
+
+			assert.ok(existsSync(frontendTodo), "frontend/todo.md must be created");
+			assert.ok(existsSync(backendTodo), "backend/todo.md must be created");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

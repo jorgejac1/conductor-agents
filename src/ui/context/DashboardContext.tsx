@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useReducer, useState } from "react";
-import { fetchTracks } from "../hooks/api.js";
+import { fetchTracks, fetchWorkspace, fetchWorkspaceProjects } from "../hooks/api.js";
 import { useSSE } from "../hooks/useSSE.js";
 import type {
 	ConnectionStatus,
@@ -8,6 +8,7 @@ import type {
 	SSEEvent,
 	SwarmState,
 	TrackStatus,
+	WorkspaceState,
 } from "../types.js";
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -34,6 +35,7 @@ interface DashboardState {
 	budgetExceededTracks: Set<string>;
 	/** When true, new SSE events are not appended to activityLog. */
 	logPaused: boolean;
+	workspace: WorkspaceState | null;
 	lastUpdate: Date | null;
 }
 
@@ -50,7 +52,8 @@ type Action =
 	| { type: "ACTIVITY_LOG"; entry: Omit<ActivityLogEntry, "index"> }
 	| { type: "PAUSE_LOG" }
 	| { type: "RESUME_LOG" }
-	| { type: "CLEAR_LOG" };
+	| { type: "CLEAR_LOG" }
+	| { type: "WORKSPACE_UPDATE"; workspace: WorkspaceState };
 
 function reducer(state: DashboardState, action: Action): DashboardState {
 	switch (action.type) {
@@ -73,7 +76,8 @@ function reducer(state: DashboardState, action: Action): DashboardState {
 		}
 		case "SWARM_UPDATE": {
 			// Identify which track this swarm belongs to via todoPath
-			const trackId = action.state.todoPath.split("/").at(-3) ?? "";
+			// Path: .../.conductor/tracks/<trackId>/todo.md → at(-2) is trackId
+			const trackId = action.state.todoPath.split("/").at(-2) ?? "";
 			return {
 				...state,
 				swarmStates: { ...state.swarmStates, [trackId]: action.state },
@@ -120,6 +124,8 @@ function reducer(state: DashboardState, action: Action): DashboardState {
 		case "WORKER_START":
 		case "WORKER_RETRY":
 			return { ...state, lastUpdate: new Date() };
+		case "WORKSPACE_UPDATE":
+			return { ...state, workspace: action.workspace, lastUpdate: new Date() };
 		default:
 			return state;
 	}
@@ -133,6 +139,7 @@ const INITIAL_STATE: DashboardState = {
 	activityLog: [],
 	budgetExceededTracks: new Set(),
 	logPaused: false,
+	workspace: null,
 	lastUpdate: null,
 };
 
@@ -154,6 +161,9 @@ interface DashboardContextValue {
 	pauseLog: () => void;
 	resumeLog: () => void;
 	clearLog: () => void;
+	selectedProjectId: string | null;
+	setSelectedProjectId: (id: string | null) => void;
+	refreshWorkspace: () => Promise<void>;
 }
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
@@ -165,6 +175,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 	const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
 	const [toast, setToast] = useState<ToastMessage | null>(null);
 	const toastTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
 	const showToast = useCallback((text: string, kind: "success" | "error" = "success") => {
 		if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -187,10 +198,26 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 	const resumeLog = useCallback(() => dispatch({ type: "RESUME_LOG" }), []);
 	const clearLog = useCallback(() => dispatch({ type: "CLEAR_LOG" }), []);
 
+	const refreshWorkspace = useCallback(async () => {
+		try {
+			const [info, projects] = await Promise.all([fetchWorkspace(), fetchWorkspaceProjects()]);
+			dispatch({
+				type: "WORKSPACE_UPDATE",
+				workspace: { root: info.root, projects, discovered: info.discovered ?? false },
+			});
+		} catch {
+			/* workspace api not available yet */
+		}
+	}, []);
+
 	// Initial load
 	React.useEffect(() => {
 		void refreshTracks();
 	}, [refreshTracks]);
+
+	React.useEffect(() => {
+		void refreshWorkspace();
+	}, [refreshWorkspace]);
 
 	// SSE handler
 	const handleMessage = useCallback(
@@ -253,6 +280,21 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 					dispatch({ type: "BUDGET_EXCEEDED", trackId: event.trackId });
 					showToast(`Budget exceeded for track: ${event.trackId}`, "error");
 					break;
+				default: {
+					// Handle forward-compat events not yet in the SSEEvent union (e.g. "workspace").
+					const raw = event as unknown as Record<string, unknown>;
+					if (raw.type === "workspace") {
+						dispatch({
+							type: "WORKSPACE_UPDATE",
+							workspace: {
+								root: raw.root as string,
+								projects: raw.projects as WorkspaceState["projects"],
+								discovered: (raw.discovered as boolean) ?? false,
+							},
+						});
+					}
+					break;
+				}
 			}
 		},
 		[showToast],
@@ -272,6 +314,9 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 				pauseLog,
 				resumeLog,
 				clearLog,
+				selectedProjectId,
+				setSelectedProjectId,
+				refreshWorkspace,
 			}}
 		>
 			{children}

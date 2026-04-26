@@ -23,14 +23,17 @@ export function KanbanColumn({ trackStatus, workers, evalResults }: KanbanColumn
 	const [pauseSubmitting, setPauseSubmitting] = useState(false);
 
 	const isRunning = workers.some((w) => RUNNING_STATUSES.has(w.status));
-	const btnDisabled = isRunning || submitting;
+	const noTasks = todoTotal === 0;
+	const btnDisabled = isRunning || submitting || noTasks;
 	const btnLabel = isRunning
 		? "Running…"
 		: submitting
 			? "Starting…"
-			: workers.length > 0
-				? "Run again"
-				: "Run";
+			: noTasks
+				? "No tasks"
+				: workers.length > 0
+					? "Run again"
+					: "Run";
 
 	// Sync paused state from server on mount and when track changes
 	useEffect(() => {
@@ -123,22 +126,32 @@ export function KanbanColumn({ trackStatus, workers, evalResults }: KanbanColumn
 					>
 						{btnLabel}
 					</button>
+					{noTasks && <div className="run-btn-hint">Add tasks to todo.md to enable</div>}
 				</div>
 			) : (
 				workers.map((w) => (
-					<KanbanCard key={w.id} trackId={track.id} worker={w} evalResult={evalResults[w.id]} />
+					<KanbanCard
+						key={w.id}
+						trackId={track.id}
+						worker={w}
+						evalResult={evalResults[w.id]}
+						trackPaused={paused}
+					/>
 				))
 			)}
 
 			{workers.length > 0 && (
-				<button
-					type="button"
-					className="btn btn-sm run-btn-col"
-					onClick={handleRun}
-					disabled={btnDisabled}
-				>
-					{btnLabel}
-				</button>
+				<>
+					<button
+						type="button"
+						className="btn btn-sm run-btn-col"
+						onClick={handleRun}
+						disabled={btnDisabled}
+					>
+						{btnLabel}
+					</button>
+					{noTasks && <div className="run-btn-hint">Add tasks to todo.md to enable</div>}
+				</>
 			)}
 
 			{cost && cost.totalTokens > 0 && (

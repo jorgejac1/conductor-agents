@@ -1,6 +1,6 @@
 {
   "name": "conductor-agents",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "Multi-agent orchestrator with eval-gated quality gates. Spawn parallel agent workers per track, verify output before merging.",
   "type": "module",
   "bin": {
@@ -56,6 +56,6 @@
     "typescript": "^5.6.0"
   },
   "dependencies": {
-    "evalgate": "^2.3.0"
+    "evalgate": "^2.3.1"
   }
 }
