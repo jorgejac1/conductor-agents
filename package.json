@@ -56,6 +56,6 @@
     "typescript": "^5.6.0"
   },
   "dependencies": {
-    "evalgate": "^2.3.1"
+    "evalgate": "^3.0.0"
   }
 }

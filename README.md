@@ -9,7 +9,7 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v2.3.0](https://img.shields.io/badge/version-v2.3.0-brightgreen.svg)](#roadmap)
+[![v3.0.0](https://img.shields.io/badge/version-v3.0.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -579,7 +579,8 @@ The image is based on `node:22-slim` with `git` installed (required for worktree
 | v2.1 | Track dependencies (`--depends` flag, DAG `runAll`, cycle detection in `doctor`), live log streaming in detail panel (SSE), typed failure badges (`TIMEOUT` / `MERGE` / `FAILED` / `ERROR`), dependency edges in graph view, keyboard shortcuts (`r`, `↑↓`, `?`), `worker-start` / `worker-retry` SSE events | Shipped |
 | v2.2 | Budget guardrails — per-track `maxTokens` / `maxUsd` in `config.json`; breach pauses new workers and fires Telegram alert. Mobile-responsive layout. Activity tab drill-down tooltips | Shipped |
 | v2.3 | `conductor report --html` — self-contained HTML export (graph snapshot, worker timeline, cost table). `conductor plan diff` + `plan apply --yes` — diff mode shows added/removed/changed tracks before applying, `--yes` bypasses interactive prompt. Pause/Resume API (`POST /pause`, `POST /resume`) backed by `AbortSignal` in orchestrator — fixes budget-guardrail bug where new workers kept spawning after breach. History pagination (`?offset`, `?from`, `?to`, `?result`). MCP expanded to 12 tools (adds `get_logs`, `cancel_run`, `list_history`, `get_plan_diff`). Workers tab search + status filter pills. Kanban Pause/Resume button. | Shipped |
-| v3.0 | Workspace mode — multi-project dashboard aggregating multiple `.conductor/` dirs, remote workers via SSH/container | Planned |
+| v3.0 | Workspace mode — multi-project workspace sidebar aggregating multiple `.conductor/` dirs with project switcher. Remote workers via SSH runner and Docker runner. `agentCmd` inline flag support (`"claude --dangerously-skip-permissions"`). Run button disabled with hint when track has no tasks. Activity tab bar chart track-name fix. evalgate ^3.0.0 (breaking: `BudgetExceededEvent` added to `SwarmEvent` union). | Shipped |
+| v3.1 | Persistent scheduler (SQLite-backed cron, missed-fire replay). Settings editor UI — in-dashboard config edits. Plan iteration loop — planner consumes eval output from trial run and refines tasks. Webhook HMAC signing + auth. | Planned |
 
 ---
 
