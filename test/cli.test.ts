@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -57,6 +57,12 @@ function tmpGitRepo(): string {
 function initedDir(): string {
 	const dir = tmpGitRepo();
 	conductor(["init", "--yes"], dir);
+	// Override agentCmd to "node" — "claude" is not available in CI environments.
+	// doctor checks `which <agentCmd>`, so this must be a universally installed binary.
+	const cfgPath = join(dir, ".conductor", "config.json");
+	const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as { defaults: { agentCmd: string } };
+	cfg.defaults.agentCmd = "node";
+	writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
 	return dir;
 }
 
