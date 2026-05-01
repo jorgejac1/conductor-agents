@@ -101,7 +101,7 @@ describe("conductor MCP server", () => {
 		}
 	});
 
-	it("tools/list returns 6 tools", async () => {
+	it("tools/list returns 16 tools", async () => {
 		const { dir, cleanup } = makeTmpProject();
 		try {
 			const [initRes, listRes] = await rpc(dir, [
@@ -122,7 +122,7 @@ describe("conductor MCP server", () => {
 			assert.ok(initRes.result, "expected init result");
 			assert.ok(listRes.result, "expected list result");
 			const r = listRes.result as { tools?: unknown[] };
-			assert.strictEqual(r.tools?.length, 12); // 8 original + get_logs + cancel_run + list_history + get_plan_diff
+			assert.strictEqual(r.tools?.length, 16); // 8 original + get_logs + cancel_run + list_history + get_plan_diff
 		} finally {
 			cleanup();
 		}

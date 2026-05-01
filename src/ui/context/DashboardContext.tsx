@@ -1,7 +1,14 @@
 import React, { createContext, useCallback, useContext, useReducer, useState } from "react";
-import { fetchTracks, fetchWorkspace, fetchWorkspaceProjects } from "../hooks/api.js";
+import {
+	fetchConfig,
+	fetchProjectTracks,
+	fetchTracks,
+	fetchWorkspace,
+	fetchWorkspaceProjects,
+} from "../hooks/api.js";
 import { useSSE } from "../hooks/useSSE.js";
 import type {
+	ConductorConfig,
 	ConnectionStatus,
 	CostEvent,
 	EvalResult,
@@ -36,6 +43,8 @@ interface DashboardState {
 	/** When true, new SSE events are not appended to activityLog. */
 	logPaused: boolean;
 	workspace: WorkspaceState | null;
+	/** Current conductor config — loaded on mount and updated via config-changed SSE. */
+	config: ConductorConfig | null;
 	lastUpdate: Date | null;
 }
 
@@ -53,7 +62,8 @@ type Action =
 	| { type: "PAUSE_LOG" }
 	| { type: "RESUME_LOG" }
 	| { type: "CLEAR_LOG" }
-	| { type: "WORKSPACE_UPDATE"; workspace: WorkspaceState };
+	| { type: "WORKSPACE_UPDATE"; workspace: WorkspaceState }
+	| { type: "CONFIG_UPDATE"; config: ConductorConfig };
 
 function reducer(state: DashboardState, action: Action): DashboardState {
 	switch (action.type) {
@@ -126,6 +136,8 @@ function reducer(state: DashboardState, action: Action): DashboardState {
 			return { ...state, lastUpdate: new Date() };
 		case "WORKSPACE_UPDATE":
 			return { ...state, workspace: action.workspace, lastUpdate: new Date() };
+		case "CONFIG_UPDATE":
+			return { ...state, config: action.config, lastUpdate: new Date() };
 		default:
 			return state;
 	}
@@ -140,6 +152,7 @@ const INITIAL_STATE: DashboardState = {
 	budgetExceededTracks: new Set(),
 	logPaused: false,
 	workspace: null,
+	config: null,
 	lastUpdate: null,
 };
 
@@ -164,6 +177,9 @@ interface DashboardContextValue {
 	selectedProjectId: string | null;
 	setSelectedProjectId: (id: string | null) => void;
 	refreshWorkspace: () => Promise<void>;
+	refreshConfig: () => Promise<void>;
+	/** Monotonically increasing counter bumped on every memory-changed SSE event. */
+	memoryVersion: number;
 }
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
@@ -176,6 +192,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 	const [toast, setToast] = useState<ToastMessage | null>(null);
 	const toastTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+	const [memoryVersion, setMemoryVersion] = useState(0);
 
 	const showToast = useCallback((text: string, kind: "success" | "error" = "success") => {
 		if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -210,14 +227,40 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 		}
 	}, []);
 
+	const refreshConfig = useCallback(async () => {
+		try {
+			const cfg = await fetchConfig();
+			dispatch({ type: "CONFIG_UPDATE", config: cfg });
+		} catch {
+			/* config fetch failure is non-fatal */
+		}
+	}, []);
+
 	// Initial load
 	React.useEffect(() => {
 		void refreshTracks();
 	}, [refreshTracks]);
 
+	// When user selects a different workspace project, load that project's tracks
+	React.useEffect(() => {
+		if (!selectedProjectId) {
+			void refreshTracks();
+			return;
+		}
+		fetchProjectTracks(selectedProjectId)
+			.then((tracks) => dispatch({ type: "TRACKS_UPDATE", tracks }))
+			.catch(() => {
+				/* project may not be fully initialized */
+			});
+	}, [selectedProjectId, refreshTracks]);
+
 	React.useEffect(() => {
 		void refreshWorkspace();
 	}, [refreshWorkspace]);
+
+	React.useEffect(() => {
+		void refreshConfig();
+	}, [refreshConfig]);
 
 	// SSE handler
 	const handleMessage = useCallback(
@@ -280,6 +323,13 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 					dispatch({ type: "BUDGET_EXCEEDED", trackId: event.trackId });
 					showToast(`Budget exceeded for track: ${event.trackId}`, "error");
 					break;
+				case "config-changed":
+					dispatch({ type: "CONFIG_UPDATE", config: event.config });
+					break;
+				case "memory-changed":
+					// Increment a counter so MemoryTab can react via useEffect dependency
+					setMemoryVersion((v) => v + 1);
+					break;
 				default: {
 					// Handle forward-compat events not yet in the SSEEvent union (e.g. "workspace").
 					const raw = event as unknown as Record<string, unknown>;
@@ -317,6 +367,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 				selectedProjectId,
 				setSelectedProjectId,
 				refreshWorkspace,
+				refreshConfig,
+				memoryVersion,
 			}}
 		>
 			{children}

@@ -53,6 +53,7 @@ export function WorkersTab() {
 	return (
 		<div className="workers-layout">
 			<div className="workers-sidebar">
+				<div className="workers-sidebar-label">Tracks</div>
 				{tracks.map((ts) => {
 					const swarm = swarmStates[ts.track.id] ?? ts.swarmState;
 					const count = swarm?.workers.length ?? 0;

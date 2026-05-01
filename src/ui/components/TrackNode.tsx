@@ -20,6 +20,20 @@ function isRunning(workers: WorkerState[]): boolean {
 	return workers.some((w) => RUNNING_STATUSES.has(w.status));
 }
 
+// Shows worker pass-rate, not todo completion: "2/3 passed" → "67%"
+// Returns "—" for no workers, "…" for in-flight with no settled yet
+function nodeLabel(workers: WorkerState[], evalResults: Record<string, EvalResult>): string {
+	if (workers.length === 0) return "—";
+	const settled = workers.filter((w) => w.status === "done" || w.status === "failed");
+	if (settled.length === 0) return "…";
+	const passed = settled.filter((w) => {
+		const ev = evalResults[w.id];
+		const p = ev?.passed ?? w.verifierPassed;
+		return p === true;
+	}).length;
+	return `${Math.round((passed / settled.length) * 100)}%`;
+}
+
 interface TrackNodeProps {
 	trackStatus: TrackStatus;
 	workers: WorkerState[];
@@ -43,16 +57,16 @@ export function TrackNode({
 	onHover,
 	onClick,
 }: TrackNodeProps) {
-	const { track, todoDone, todoTotal, cost } = trackStatus;
+	const { track, cost } = trackStatus;
 	const color = trackStatusColor(workers, evalResults);
 	const running = isRunning(workers);
-	const pct = todoTotal > 0 ? Math.round((todoDone / todoTotal) * 100) : 0;
+	const label = nodeLabel(workers, evalResults);
 
 	return (
 		<button
 			type="button"
 			className={`graph-track-node${selected ? " selected" : ""}${running ? " running" : ""}`}
-			aria-label={`${track.name} — ${pct}% complete`}
+			aria-label={`${track.name} — ${label}`}
 			aria-pressed={selected}
 			style={
 				{
@@ -66,16 +80,14 @@ export function TrackNode({
 			onMouseLeave={() => onHover(null)}
 			onClick={() => onClick(track.id)}
 		>
-			{/* Outer pulse ring */}
 			<div className="graph-track-ring" />
-			{/* Inner circle */}
 			<div className="graph-track-circle">
-				<span className="graph-track-label-inner">{pct}%</span>
+				<span className="graph-track-label-inner">{label}</span>
 			</div>
-			{/* Label below */}
 			<div className="graph-track-label">{track.name}</div>
-			{/* Cost tag */}
-			{cost && <div className="graph-track-cost">${cost.estimatedUsd.toFixed(3)}</div>}
+			{cost && cost.estimatedUsd > 0 && (
+				<div className="graph-track-cost">${cost.estimatedUsd.toFixed(3)}</div>
+			)}
 		</button>
 	);
 }

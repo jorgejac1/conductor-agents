@@ -15,6 +15,8 @@ import { createInterface } from "node:readline";
 import type { McpJsonRpcRequest, McpJsonRpcResponse, McpToolDefinition } from "evalgate";
 import { queryRuns } from "evalgate";
 import { loadConfig, saveConfig, trackTodoPath } from "./config.js";
+import type { MemoryType } from "./memory.js";
+import { listMemorySlugs, loadMemory, searchMemory, writeMemory } from "./memory.js";
 import {
 	getTrackCost,
 	getTrackState,
@@ -207,6 +209,58 @@ const TOOLS: McpToolDefinition[] = [
 			},
 		},
 	},
+	{
+		name: "read_memory",
+		description:
+			"Read memories from the project memory vault. Filter by scope ('global' or 'track:<id>') or type ('lesson', 'decision', 'reference', 'failure-pattern').",
+		inputSchema: {
+			type: "object",
+			properties: {
+				scope: { type: "string", description: "Filter by scope (e.g. 'global' or 'track:auth')" },
+				type: { type: "string", description: "Filter by type" },
+				slug: { type: "string", description: "Return a specific memory by slug" },
+			},
+		},
+	},
+	{
+		name: "write_memory",
+		description:
+			"Write a new memory to the project memory vault. Default scope is 'global' when called from a context without a track ID.",
+		inputSchema: {
+			type: "object",
+			required: ["name", "type", "scope", "body"],
+			properties: {
+				name: { type: "string", description: "Short unique name for this memory" },
+				type: {
+					type: "string",
+					description: "Memory type: lesson, decision, reference, or failure-pattern",
+				},
+				scope: { type: "string", description: "'global' or 'track:<id>'" },
+				body: { type: "string", description: "Memory content" },
+				tags: { type: "string", description: "Comma-separated optional tags" },
+			},
+		},
+	},
+	{
+		name: "search_memory",
+		description: "Search memories by a query string (substring match on name, body, and tags).",
+		inputSchema: {
+			type: "object",
+			required: ["query"],
+			properties: {
+				query: {
+					type: "string",
+					description: "Search query (substring match on name, body, tags)",
+				},
+				scope: { type: "string", description: "Filter by scope: 'global' or 'track:<id>'" },
+			},
+		},
+	},
+	{
+		name: "list_memories",
+		description: "List all memory slugs in the project vault.",
+		inputSchema: { type: "object", properties: {} },
+	},
 ];
 
 // ---------------------------------------------------------------------------
@@ -353,6 +407,61 @@ async function handleUnscheduleTrack(params: Params, cwd: string): Promise<unkno
 }
 
 // ---------------------------------------------------------------------------
+// Memory tool handlers
+// ---------------------------------------------------------------------------
+
+async function handleReadMemory(params: Params, cwd: string): Promise<unknown> {
+	const scope = typeof params.scope === "string" ? params.scope : undefined;
+	const type = typeof params.type === "string" ? (params.type as MemoryType) : undefined;
+	const slug = typeof params.slug === "string" ? params.slug : undefined;
+	if (slug) {
+		const all = loadMemory(cwd);
+		const mem = all.find((m) => m.filePath.endsWith(`${slug}.md`));
+		if (!mem) throw new Error(`memory '${slug}' not found`);
+		return mem;
+	}
+	return loadMemory(cwd, {
+		...(scope !== undefined && { scope }),
+		...(type !== undefined && { types: [type] }),
+	});
+}
+
+async function handleWriteMemory(params: Params, cwd: string): Promise<unknown> {
+	const name = typeof params.name === "string" ? params.name : undefined;
+	const type = typeof params.type === "string" ? (params.type as MemoryType) : undefined;
+	const scope = typeof params.scope === "string" ? params.scope : undefined;
+	const body = typeof params.body === "string" ? params.body : undefined;
+	if (!name || !type || !scope || !body)
+		throw new Error("name, type, scope, and body are required");
+	const rawTags = typeof params.tags === "string" ? params.tags : "";
+	const tags = rawTags
+		? rawTags
+				.split(",")
+				.map((t) => t.trim())
+				.filter(Boolean)
+		: [];
+	const filePath = writeMemory(cwd, {
+		name,
+		type,
+		scope: scope as "global" | `track:${string}`,
+		body,
+		tags,
+	});
+	const slug = filePath.split("/").pop()?.replace(/\.md$/, "") ?? "";
+	return { ok: true, slug, filePath };
+}
+
+async function handleSearchMemory(params: Params, cwd: string): Promise<unknown> {
+	const query = typeof params.query === "string" ? params.query : "";
+	const scope = typeof params.scope === "string" ? params.scope : undefined;
+	return searchMemory(cwd, query, scope !== undefined ? { scope } : undefined);
+}
+
+async function handleListMemories(_params: Params, cwd: string): Promise<unknown> {
+	return listMemorySlugs(cwd);
+}
+
+// ---------------------------------------------------------------------------
 // JSON-RPC dispatch
 // ---------------------------------------------------------------------------
 
@@ -433,6 +542,18 @@ async function dispatch(req: McpJsonRpcRequest, cwd: string): Promise<void> {
 					break;
 				case "get_plan_diff":
 					result = await handleGetPlanDiff(toolParams, cwd);
+					break;
+				case "read_memory":
+					result = await handleReadMemory(toolParams, cwd);
+					break;
+				case "write_memory":
+					result = await handleWriteMemory(toolParams, cwd);
+					break;
+				case "search_memory":
+					result = await handleSearchMemory(toolParams, cwd);
+					break;
+				case "list_memories":
+					result = await handleListMemories(toolParams, cwd);
 					break;
 				default:
 					sendError(id, -32601, `unknown tool: ${toolName}`);

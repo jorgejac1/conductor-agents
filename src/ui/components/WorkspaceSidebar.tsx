@@ -8,11 +8,15 @@ export function WorkspaceSidebar() {
 	const [initGoal, setInitGoal] = useState("");
 	const [initingId, setInitingId] = useState<string | null>(null);
 	const [expandedInit, setExpandedInit] = useState<string | null>(null);
+	const [showUninit, setShowUninit] = useState(false);
 
 	if (!state.workspace?.discovered) return null;
 
 	const { root, projects } = state.workspace;
 	const rootName = root.split("/").at(-1) ?? root;
+
+	const initialized = projects.filter((p) => p.initialized);
+	const uninitialized = projects.filter((p) => !p.initialized);
 
 	async function handleInit(projectId: string) {
 		setInitingId(projectId);
@@ -29,6 +33,65 @@ export function WorkspaceSidebar() {
 		}
 	}
 
+	function renderProject(project: (typeof projects)[number]) {
+		const isSelected = selectedProjectId === project.id;
+		const isExpanded = expandedInit === project.id;
+
+		return (
+			<li key={project.id} className="workspace-project-item">
+				<button
+					type="button"
+					role="option"
+					aria-selected={isSelected}
+					className={`workspace-project-btn${isSelected ? " selected" : ""}${
+						!project.initialized ? " uninit" : ""
+					}`}
+					onClick={() => {
+						if (project.initialized) {
+							setSelectedProjectId(isSelected ? null : project.id);
+							setExpandedInit(null);
+						} else {
+							setExpandedInit(isExpanded ? null : project.id);
+						}
+					}}
+				>
+					<span
+						className={`project-status-dot ${
+							project.initialized ? (project.runnersActive > 0 ? "running" : "idle") : "uninit"
+						}`}
+					/>
+					<span className="project-name">{project.id}</span>
+					{project.initialized && project.runnersActive > 0 && (
+						<span className="project-badge">{project.runnersActive}</span>
+					)}
+				</button>
+
+				{!project.initialized && isExpanded && (
+					<div className="project-init-form">
+						<input
+							type="text"
+							placeholder="Goal (optional)"
+							value={initGoal}
+							onChange={(e) => setInitGoal(e.target.value)}
+							className="project-init-goal"
+							aria-label="Project goal"
+						/>
+						<div className="project-init-actions">
+							<button
+								type="button"
+								className="btn-init"
+								disabled={initingId === project.id}
+								onClick={() => void handleInit(project.id)}
+							>
+								{initingId === project.id ? "Initializing…" : "Initialize"}
+							</button>
+						</div>
+					</div>
+				)}
+			</li>
+		);
+	}
+
 	return (
 		<aside className="workspace-sidebar">
 			<div className="workspace-sidebar-header">
@@ -37,71 +100,33 @@ export function WorkspaceSidebar() {
 				</span>
 			</div>
 
+			{/* Initialized projects — always visible */}
 			<ul className="workspace-project-list" aria-label="Projects">
-				{projects.map((project) => {
-					const isSelected = selectedProjectId === project.id;
-					const isExpanded = expandedInit === project.id;
-
-					return (
-						<li key={project.id} className="workspace-project-item">
-							<button
-								type="button"
-								role="option"
-								aria-selected={isSelected}
-								className={`workspace-project-btn${isSelected ? " selected" : ""}${
-									!project.initialized ? " uninit" : ""
-								}`}
-								onClick={() => {
-									if (project.initialized) {
-										setSelectedProjectId(isSelected ? null : project.id);
-										setExpandedInit(null);
-									} else {
-										setExpandedInit(isExpanded ? null : project.id);
-									}
-								}}
-							>
-								<span
-									className={`project-status-dot ${
-										project.initialized
-											? project.runnersActive > 0
-												? "running"
-												: "idle"
-											: "uninit"
-									}`}
-								/>
-								<span className="project-name">{project.id}</span>
-								{project.initialized && project.runnersActive > 0 && (
-									<span className="project-badge">{project.runnersActive}</span>
-								)}
-							</button>
-
-							{/* Inline init form for uninitialized projects */}
-							{!project.initialized && isExpanded && (
-								<div className="project-init-form">
-									<input
-										type="text"
-										placeholder="Goal (optional)"
-										value={initGoal}
-										onChange={(e) => setInitGoal(e.target.value)}
-										className="project-init-goal"
-										aria-label="Project goal"
-									/>
-									<div className="project-init-actions">
-										<button
-											type="button"
-											className="btn-init"
-											disabled={initingId === project.id}
-											onClick={() => void handleInit(project.id)}
-										>
-											{initingId === project.id ? "Initializing…" : "Initialize"}
-										</button>
-									</div>
-								</div>
-							)}
-						</li>
-					);
-				})}
+				{initialized.map(renderProject)}
 			</ul>
+
+			{/* Uninitialized projects — collapsed by default */}
+			{uninitialized.length > 0 && (
+				<div className="workspace-uninit-section">
+					<button
+						type="button"
+						className="workspace-uninit-toggle"
+						onClick={() => setShowUninit((v) => !v)}
+						aria-expanded={showUninit}
+					>
+						<span className="workspace-uninit-chevron">{showUninit ? "▾" : "▸"}</span>
+						<span>{uninitialized.length} uninitialized</span>
+					</button>
+					{showUninit && (
+						<ul
+							className="workspace-project-list workspace-project-list-uninit"
+							aria-label="Uninitialized projects"
+						>
+							{uninitialized.map(renderProject)}
+						</ul>
+					)}
+				</div>
+			)}
 		</aside>
 	);
 }

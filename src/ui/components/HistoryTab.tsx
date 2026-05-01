@@ -104,20 +104,24 @@ export function HistoryTab() {
 						</button>
 					))}
 				</div>
-				<input
-					type="date"
-					className="history-date"
-					title="From date"
-					value={fromDate}
-					onChange={(e) => setFromDate(e.target.value)}
-				/>
-				<input
-					type="date"
-					className="history-date"
-					title="To date"
-					value={toDate}
-					onChange={(e) => setToDate(e.target.value)}
-				/>
+				<label className="history-date-wrap">
+					<span className="history-date-label">from</span>
+					<input
+						type="date"
+						className="history-date"
+						value={fromDate}
+						onChange={(e) => setFromDate(e.target.value)}
+					/>
+				</label>
+				<label className="history-date-wrap">
+					<span className="history-date-label">to</span>
+					<input
+						type="date"
+						className="history-date"
+						value={toDate}
+						onChange={(e) => setToDate(e.target.value)}
+					/>
+				</label>
 				<button type="button" className="btn btn-sm" onClick={exportCsv}>
 					Export CSV
 				</button>
@@ -126,7 +130,12 @@ export function HistoryTab() {
 			{loading ? (
 				<div style={{ color: "var(--muted)", fontSize: 12, padding: 20 }}>Loading…</div>
 			) : records.length === 0 ? (
-				<div className="history-empty">No history yet.</div>
+				<div className="history-empty">
+					<div className="history-empty-title">No history yet</div>
+					<div className="history-empty-desc">
+						Run a track to start recording results. Each completed worker run appears here.
+					</div>
+				</div>
 			) : (
 				<div className="history-table-wrap">
 					<table className="history-table">

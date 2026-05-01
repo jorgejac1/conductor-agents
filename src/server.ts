@@ -15,6 +15,7 @@
  *   POST /api/tracks/:id/budget        → record budget usage
  *   GET /api/tracks/:id/logs/:workerId → one-shot log fetch
  *   GET /api/tracks/:id/logs/:workerId/stream → SSE log stream
+ *   POST /api/config                    → update defaults / telegram / webhook
  *   POST /api/config/tracks/:id        → patch track config
  *   GET /api/workspace                 → workspace root info
  *   GET /api/workspace/projects        → list all projects
@@ -23,13 +24,13 @@
  *   POST /api/workspace/projects/:id/run/:trackId → run track in project
  */
 
-import { createHmac } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { BudgetExceededEvent, SwarmState } from "evalgate";
 import { queryRuns, reportTokenUsage, swarmEvents } from "evalgate";
-import { loadConfig, saveConfig, trackTodoPath } from "./config.js";
+import { loadConfig, saveConfig, trackTodoPath, validateConfig } from "./config.js";
+import { loadMemory, removeMemory, searchMemory, writeMemory } from "./memory.js";
 import {
 	getTrackCost,
 	getTrackState,
@@ -43,6 +44,7 @@ import { Router } from "./router.js";
 import { listTracks } from "./track.js";
 import type { TrackStatus } from "./types.js";
 import { htmlDashboard } from "./ui-bundle.js";
+import { readBody as readBodyUtil, verifyHmac } from "./webhook-auth.js";
 import { registerWorkspaceRoutes } from "./workspace/api.js";
 
 export interface ServerOptions {
@@ -203,12 +205,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		// If body was already buffered (e.g. for HMAC check), return it directly.
 		const buffered = (req as IncomingMessage & { _body?: string })._body;
 		if (buffered !== undefined) return Promise.resolve(buffered);
-		return new Promise((resolve, reject) => {
-			const chunks: Buffer[] = [];
-			req.on("data", (chunk: Buffer) => chunks.push(chunk));
-			req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-			req.on("error", reject);
-		});
+		return readBodyUtil(req);
 	}
 
 	const router = new Router();
@@ -242,7 +239,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 
 	// GET /api/tracks/:id/state
 	router.get("/api/tracks/:id/state", (_req, res, params) => {
-		getTrackState(param(params, "id"), cwd)
+		const trackId = param(params, "id");
+		const cfg = loadConfig(cwd);
+		if (!cfg?.tracks.find((t) => t.id === trackId)) {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "track not found", trackId }));
+			return;
+		}
+		getTrackState(trackId, cwd)
 			.then((state) => {
 				res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
 				res.end(JSON.stringify(state ?? null));
@@ -582,6 +586,20 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		res.end(JSON.stringify(record));
 	});
 
+	// Mask sensitive fields before sending config to clients
+	function redactConfig(cfg: import("./types.js").ConductorConfig): unknown {
+		const copy = JSON.parse(JSON.stringify(cfg)) as typeof cfg;
+		if (copy.telegram?.token) {
+			const t = copy.telegram.token;
+			copy.telegram.token = `${t.slice(0, Math.max(0, t.length - 4))}••••`;
+		}
+		if (copy.webhook?.secret) {
+			const s = copy.webhook.secret;
+			copy.webhook.secret = `${s.slice(0, Math.max(0, s.length - 4))}••••`;
+		}
+		return copy;
+	}
+
 	// GET /api/config
 	router.get("/api/config", (_req, res) => {
 		const cfg = loadConfig(cwd);
@@ -589,6 +607,77 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		res.end(
 			JSON.stringify(cfg ?? { tracks: [], defaults: { concurrency: 1, agentCmd: "claude" } }),
 		);
+	});
+
+	// POST /api/config — update top-level defaults / telegram / webhook fields
+	router.post("/api/config", async (req, res) => {
+		const body = await readBody(req);
+		let patch: Record<string, unknown> = {};
+		try {
+			patch = JSON.parse(body) as Record<string, unknown>;
+		} catch {
+			res.writeHead(400, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Invalid JSON body" }));
+			return;
+		}
+
+		const existing = loadConfig(cwd);
+		if (!existing) {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "No config found" }));
+			return;
+		}
+
+		const merged = { ...existing };
+		if (patch.defaults !== undefined) {
+			merged.defaults = { ...existing.defaults, ...(patch.defaults as object) };
+		}
+		// null → remove the section; object → merge; omitted → no change
+		if (patch.telegram === null) {
+			delete (merged as Record<string, unknown>).telegram;
+		} else if (patch.telegram !== undefined) {
+			merged.telegram = {
+				...existing.telegram,
+				...(patch.telegram as object),
+			} as import("./types.js").TelegramBotConfig;
+		}
+		if (patch.webhook === null) {
+			delete (merged as Record<string, unknown>).webhook;
+		} else if (patch.webhook !== undefined) {
+			const pw = patch.webhook as { secret?: string };
+			const combined: { secret?: string } = { ...existing.webhook, ...pw };
+			// Empty-string secret is treated as "clear the secret"
+			if (combined.secret === "") delete combined.secret;
+			if (Object.keys(combined).length > 0) {
+				merged.webhook = combined;
+			} else {
+				delete (merged as Record<string, unknown>).webhook;
+			}
+		}
+		// null → remove obsidian; object → merge; omitted → no change
+		if (patch.obsidian === null) {
+			delete (merged as Record<string, unknown>).obsidian;
+		} else if (patch.obsidian !== undefined) {
+			merged.obsidian = {
+				...existing.obsidian,
+				...(patch.obsidian as object),
+			} as import("./types.js").ObsidianConfig;
+		}
+
+		let validated: import("./types.js").ConductorConfig;
+		try {
+			validated = validateConfig(merged);
+		} catch (err) {
+			res.writeHead(400, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+			return;
+		}
+
+		saveConfig(validated, cwd);
+		broadcastEvent({ type: "config-changed", config: redactConfig(validated) });
+
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(JSON.stringify({ ok: true }));
 	});
 
 	// POST /api/config/tracks/:id — patch a track's settings
@@ -647,6 +736,85 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		res.end(JSON.stringify({ conductor: conductorVersion, evalgate: evalgateVersion }));
 	});
 
+	// GET /api/memory — list memories with optional ?scope= and ?type= query params
+	router.get("/api/memory", (req, res) => {
+		const url = new URL(req.url ?? "/", "http://localhost");
+		const scope = url.searchParams.get("scope") ?? undefined;
+		const type = url.searchParams.get("type") ?? undefined;
+		const memories = loadMemory(cwd, {
+			...(scope !== undefined && { scope }),
+			...(type !== undefined && { types: [type as import("./memory.js").MemoryType] }),
+		});
+		res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+		res.end(JSON.stringify({ memories }));
+	});
+
+	// GET /api/memory/search?q=... — must be registered BEFORE /:slug to avoid param shadowing
+	router.get("/api/memory/search", (req, res) => {
+		const url = new URL(req.url ?? "/", "http://localhost");
+		const q = url.searchParams.get("q") ?? "";
+		const scope = url.searchParams.get("scope") ?? undefined;
+		const results = searchMemory(cwd, q, scope !== undefined ? { scope } : undefined);
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(JSON.stringify({ memories: results }));
+	});
+
+	// GET /api/memory/:slug
+	router.get("/api/memory/:slug", (_req, res, params) => {
+		const slug = param(params, "slug");
+		const memories = loadMemory(cwd);
+		const mem = memories.find((m) => m.filePath.endsWith(`${slug}.md`));
+		if (!mem) {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "memory not found", slug }));
+			return;
+		}
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(JSON.stringify({ memory: mem }));
+	});
+
+	// POST /api/memory — write a new memory
+	router.post("/api/memory", async (req, res) => {
+		const body = await readBodyUtil(req);
+		let payload: Record<string, unknown> = {};
+		try {
+			payload = JSON.parse(body) as Record<string, unknown>;
+		} catch {
+			res.writeHead(400, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "invalid JSON" }));
+			return;
+		}
+		try {
+			const filePath = writeMemory(cwd, {
+				name: String(payload.name ?? ""),
+				type: payload.type as import("./memory.js").MemoryType,
+				scope: payload.scope as "global" | `track:${string}`,
+				body: String(payload.body ?? ""),
+				tags: Array.isArray(payload.tags) ? (payload.tags as string[]) : [],
+			});
+			broadcastEvent({ type: "memory-changed" });
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ ok: true, filePath }));
+		} catch (err) {
+			res.writeHead(400, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+		}
+	});
+
+	// DELETE /api/memory/:slug
+	router.on("DELETE", "/api/memory/:slug", (_req, res, params) => {
+		const slug = param(params, "slug");
+		try {
+			removeMemory(cwd, slug);
+			broadcastEvent({ type: "memory-changed" });
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ ok: true }));
+		} catch (err) {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+		}
+	});
+
 	// Register workspace routes
 	const cleanupWorkspace = registerWorkspaceRoutes(router, cwd, sseClients);
 
@@ -664,10 +832,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<ServerHandl
 		if (url.startsWith("/api/webhook") && req.method === "POST") {
 			const cfg = loadConfig(cwd);
 			if (cfg?.webhook?.secret) {
-				const body = await readBody(req);
+				const body = await readBodyUtil(req);
 				const sig = req.headers["x-hub-signature-256"] as string | undefined;
-				const expected = `sha256=${createHmac("sha256", cfg.webhook.secret).update(body).digest("hex")}`;
-				if (!sig || sig !== expected) {
+				if (!verifyHmac(body, sig, cfg.webhook.secret)) {
 					res.writeHead(401, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ error: "Invalid webhook signature" }));
 					return;

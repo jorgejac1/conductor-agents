@@ -1,4 +1,5 @@
 import { runTrack } from "../orchestrator.js";
+import { readBody, verifyHmac } from "../webhook-auth.js";
 import { c, parseFlags, positionalArgs } from "./helpers.js";
 
 export async function cmdWebhook(args: string[]): Promise<number> {
@@ -15,9 +16,16 @@ export async function cmdWebhook(args: string[]): Promise<number> {
 	const cwd = process.cwd();
 	const port = flags.port ? Number(flags.port) : 9000;
 
+	// Warn at startup if no HMAC secret is configured
+	const startupConfig = loadConfig(cwd);
+	if (!startupConfig?.webhook?.secret) {
+		console.error(
+			"WARNING: webhook running without HMAC — set `webhook.secret` in config.json to secure this endpoint",
+		);
+	}
+
 	const server = createServer((req, res) => {
 		res.setHeader("Content-Type", "application/json");
-		req.resume(); // consume any incoming body
 
 		const url = req.url?.split("?")[0] ?? "/";
 
@@ -30,24 +38,43 @@ export async function cmdWebhook(args: string[]): Promise<number> {
 		const match = url.match(/^\/webhook\/([^/]+)$/);
 		if (req.method === "POST" && match?.[1]) {
 			const trackId = decodeURIComponent(match[1]);
-			const config = loadConfig(cwd);
-			const track = config?.tracks.find((t) => t.id === trackId);
 
-			if (!track) {
-				res.writeHead(404);
-				res.end(JSON.stringify({ error: "track not found", trackId }));
-				return;
-			}
+			// Read body first so we can verify HMAC before dispatching
+			readBody(req)
+				.then((body) => {
+					const config = loadConfig(cwd);
+					const secret = config?.webhook?.secret;
 
-			res.writeHead(202);
-			res.end(JSON.stringify({ queued: true, trackId }));
+					if (secret) {
+						const sig = req.headers["x-hub-signature-256"] as string | undefined;
+						if (!verifyHmac(body, sig, secret)) {
+							res.writeHead(401);
+							res.end(JSON.stringify({ error: "Invalid webhook signature" }));
+							return;
+						}
+					}
 
-			// Fire and forget — runs async after response is sent
-			runTrack(trackId, { cwd }).catch((err: unknown) => {
-				console.error(
-					`[webhook] Error running "${trackId}": ${err instanceof Error ? err.message : String(err)}`,
-				);
-			});
+					const track = config?.tracks.find((t) => t.id === trackId);
+					if (!track) {
+						res.writeHead(404);
+						res.end(JSON.stringify({ error: "track not found", trackId }));
+						return;
+					}
+
+					res.writeHead(202);
+					res.end(JSON.stringify({ queued: true, trackId }));
+
+					// Fire and forget — runs async after response is sent
+					runTrack(trackId, { cwd }).catch((err: unknown) => {
+						console.error(
+							`[webhook] Error running "${trackId}": ${err instanceof Error ? err.message : String(err)}`,
+						);
+					});
+				})
+				.catch((err: unknown) => {
+					if (!res.headersSent) res.writeHead(500);
+					res.end(JSON.stringify({ error: String(err) }));
+				});
 			return;
 		}
 

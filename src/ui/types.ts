@@ -79,6 +79,7 @@ export interface ConductorConfig {
 		agentArgs?: string[];
 	};
 	telegram?: { token: string; chatId: number };
+	webhook?: { secret: string };
 }
 
 export interface VersionInfo {
@@ -136,6 +137,15 @@ export interface SSEBudgetExceededEvent {
 	maxUsd?: number;
 }
 
+export interface SSEConfigChangedEvent {
+	type: "config-changed";
+	config: ConductorConfig;
+}
+
+export interface SSEMemoryChangedEvent {
+	type: "memory-changed";
+}
+
 export type SSEEvent =
 	| SSETracksEvent
 	| SSESwarmEvent
@@ -143,13 +153,29 @@ export type SSEEvent =
 	| SSEEvalResultEvent
 	| SSEWorkerStartEvent
 	| SSEWorkerRetryEvent
-	| SSEBudgetExceededEvent;
+	| SSEBudgetExceededEvent
+	| SSEConfigChangedEvent
+	| SSEMemoryChangedEvent;
+
+// ─── Memory ───────────────────────────────────────────────────────────────────
+
+export type MemoryType = "lesson" | "decision" | "reference" | "failure-pattern";
+
+export interface MemoryEntry {
+	name: string;
+	type: MemoryType;
+	scope: string;
+	tags: string[];
+	body: string;
+	filePath: string;
+	createdAt: string;
+}
 
 // ─── Dashboard state ──────────────────────────────────────────────────────────
 
 export type ConnectionStatus = "connecting" | "live" | "reconnecting";
 
-export type TabId = "tracks" | "workers" | "history" | "activity" | "settings";
+export type TabId = "tracks" | "workers" | "activity" | "memory" | "settings";
 
 export interface EvalResult {
 	passed: boolean;

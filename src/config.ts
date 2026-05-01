@@ -134,6 +134,25 @@ export function validateConfig(raw: unknown): ConductorConfig {
 		}
 	}
 
+	// obsidian (optional)
+	if (obj.obsidian !== undefined) {
+		if (typeof obj.obsidian !== "object" || obj.obsidian === null) {
+			throw new Error("config.obsidian: must be an object");
+		}
+		const ob = obj.obsidian as Record<string, unknown>;
+		if (typeof ob.vaultPath !== "string" || ob.vaultPath === "")
+			throw new Error("config.obsidian.vaultPath: must be a non-empty string");
+		if (ob.subfolder !== undefined && typeof ob.subfolder !== "string")
+			throw new Error("config.obsidian.subfolder: must be a string");
+		if (ob.mode !== "push" && ob.mode !== "pull" && ob.mode !== "two-way")
+			throw new Error('config.obsidian.mode: must be "push", "pull", or "two-way"');
+	}
+
+	// defaults.memoryBudgetBytes (optional)
+	const def = obj.defaults as Record<string, unknown>;
+	if (def.memoryBudgetBytes !== undefined && typeof def.memoryBudgetBytes !== "number")
+		throw new Error("config.defaults.memoryBudgetBytes: must be a number");
+
 	return raw as unknown as ConductorConfig;
 }
 

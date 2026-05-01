@@ -10,12 +10,13 @@
  *
  * The echo/true-verifier tests in orchestrator.test.ts never write budget records,
  * so queryBudgetRecords always returns [] there. These tests use a tiny CJS helper
- * script as the agentCmd so real budget records land in budget.ndjson.
+ * script as the agentCmd so real budget records land in the evalgate budget store
+ * (v3.1+: SQLite budget.db; written via NDJSON which is migrated on first DB open).
  */
 
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -206,10 +207,15 @@ describe("budget guardrail — onWorkerComplete after a failed worker", () => {
 				"PAUSED marker should be written after budget exceeded",
 			);
 
-			// Confirm the agent actually wrote budget records (so the test is meaningful)
-			assert.ok(existsSync(budgetPath), "budget.ndjson should exist after agent ran");
-			const lines = readFileSync(budgetPath, "utf8").trim().split("\n").filter(Boolean);
-			assert.ok(lines.length >= 1, "budget.ndjson should have at least one record from the agent");
+			// Confirm the agent actually wrote budget records (so the test is meaningful).
+			// evalgate v3.1 migrates budget.ndjson → budget.db on first read and renames
+			// the source file to budget.ndjson.migrated, so we check for either form.
+			const dbPath = budgetPath.replace("budget.ndjson", "budget.db");
+			const migratedPath = `${budgetPath}.migrated`;
+			assert.ok(
+				existsSync(dbPath) || existsSync(migratedPath) || existsSync(budgetPath),
+				"budget records should exist after agent ran (budget.db, budget.ndjson.migrated, or budget.ndjson)",
+			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

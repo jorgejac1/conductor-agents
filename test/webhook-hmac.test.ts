@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { after, before, describe, it } from "node:test";
 import { saveConfig } from "../src/config.js";
 import { startServer } from "../src/server.js";
+import { verifyHmac } from "../src/webhook-auth.js";
 
 async function httpPost(
 	port: number,
@@ -106,6 +107,75 @@ describe("webhook HMAC validation", () => {
 		assert.strictEqual(result.status, 200);
 		const parsed = JSON.parse(result.body) as { triggered: string[] };
 		assert.ok(Array.isArray(parsed.triggered));
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Unit tests for verifyHmac edge cases (pure function — no server needed)
+// ---------------------------------------------------------------------------
+
+describe("verifyHmac — length mismatch", () => {
+	it("should return false (not throw) when provided signature has different length from computed HMAC", () => {
+		const body = "hello world";
+		const secret = "any-secret";
+
+		// The computed HMAC will be "sha256=" + 64 hex chars (71 chars total).
+		// We supply a signature of the same "sha256=" prefix but only 64 "a"s
+		// appended — matching the 71-char length of a real HMAC signature.
+		// The point: even though both buffers are the same byte-length,
+		// the hex content is wrong → timingSafeEqual returns false.
+		const wrongSig = `sha256=${"a".repeat(64)}`;
+
+		// The computed HMAC has a different *value* (not length) — both are
+		// "sha256=" + 64 hex chars so timingSafeEqual can run, returning false.
+		const result = verifyHmac(body, wrongSig, secret);
+		assert.strictEqual(
+			result,
+			false,
+			"verifyHmac should return false for a wrong signature of matching length",
+		);
+	});
+
+	it("should return false (not throw) when provided signature is structurally shorter than computed HMAC", () => {
+		const body = "test body";
+		const secret = "test-secret";
+
+		// Supply only 32 hex chars after "sha256=" — half the expected length.
+		// The length guard in verifyHmac catches this and returns false before
+		// calling timingSafeEqual (which would throw on mismatched-length buffers).
+		const shortSig = `sha256=${"a".repeat(32)}`;
+
+		assert.doesNotThrow(() => {
+			const result = verifyHmac(body, shortSig, secret);
+			assert.strictEqual(result, false);
+		});
+	});
+
+	it("should return false (not throw) when provided signature is structurally longer than computed HMAC", () => {
+		const body = "test body";
+		const secret = "test-secret";
+
+		// 128 hex chars after "sha256=" — double the expected length.
+		const longSig = `sha256=${"b".repeat(128)}`;
+
+		assert.doesNotThrow(() => {
+			const result = verifyHmac(body, longSig, secret);
+			assert.strictEqual(result, false);
+		});
+	});
+
+	it("should return false (not throw) for an empty signature string", () => {
+		assert.doesNotThrow(() => {
+			const result = verifyHmac("body", "", "secret");
+			assert.strictEqual(result, false);
+		});
+	});
+
+	it("should return false (not throw) when signature is undefined", () => {
+		assert.doesNotThrow(() => {
+			const result = verifyHmac("body", undefined, "secret");
+			assert.strictEqual(result, false);
+		});
 	});
 });
 
