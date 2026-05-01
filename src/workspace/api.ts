@@ -59,19 +59,25 @@ export function registerWorkspaceRoutes(
 		}
 	}
 
-	// Watch workspace root for new .conductor dirs appearing
-	const rootWatcher = watchDir(workspaceRoot, () => {
-		const refreshed = scanProjects(workspaceRoot);
-		if (JSON.stringify(refreshed) !== JSON.stringify(projects)) {
-			projects = refreshed;
-			broadcastWorkspace();
-		}
-	});
+	// Only watch the filesystem when we have a real multi-project workspace.
+	// Skipping when workspaceRoot === cwd or when running in a system temp dir
+	// prevents spurious EACCES errors on Linux CI runners where /tmp contains
+	// inaccessible systemd-private subdirectories.
+	const rootWatcher = isRealWorkspace
+		? watchDir(workspaceRoot, () => {
+				const refreshed = scanProjects(workspaceRoot);
+				if (JSON.stringify(refreshed) !== JSON.stringify(projects)) {
+					projects = refreshed;
+					broadcastWorkspace();
+				}
+			})
+		: { stop() {} };
 
 	// Watch each initialized project's .conductor dir
 	const projectWatchers = new Map<string, ReturnType<typeof watchDir>>();
 
 	function ensureProjectWatchers(): void {
+		if (!isRealWorkspace) return;
 		for (const p of getProjects()) {
 			if (p.initialized && !projectWatchers.has(p.id)) {
 				const conductorDir = join(p.path, ".conductor");

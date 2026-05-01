@@ -12,8 +12,10 @@ export function watchDir(dirPath: string, onChange: (filename: string) => void):
 		watcher = watch(dirPath, { recursive: true }, (_event, filename) => {
 			onChange(filename ?? "");
 		});
+		// Suppress EACCES and similar async errors (e.g. on Linux /tmp with system subdirs)
+		watcher.on("error", () => {});
 	} catch {
-		/* directory may not exist yet */
+		/* directory may not exist yet or not accessible */
 	}
 	return {
 		stop() {
@@ -22,6 +24,7 @@ export function watchDir(dirPath: string, onChange: (filename: string) => void):
 			} catch {
 				/* ignore */
 			}
+			watcher = null;
 		},
 	};
 }
