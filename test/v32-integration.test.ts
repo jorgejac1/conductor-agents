@@ -1535,6 +1535,14 @@ describe("Block 9 — conductor doctor", () => {
 	it("doctor exits 0 and reports agent plugin status", () => {
 		const dir = initedProject();
 		try {
+			// Use "node" so doctor's PATH check passes on CI where "claude" is not installed
+			const cfgPath = join(dir, ".conductor", "config.json");
+			const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as {
+				defaults: Record<string, unknown>;
+			};
+			cfg.defaults.agentCmd = "node";
+			writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+
 			const r = conductor(["doctor"], dir);
 			assert.strictEqual(r.code, 0, out(r));
 			// Doctor should mention the resolved agent in some form
