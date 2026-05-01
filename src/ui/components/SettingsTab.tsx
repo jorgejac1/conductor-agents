@@ -1,23 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "../context/DashboardContext.js";
-import { apiPatchTrack, fetchConfig, fetchTelegramStatus, fetchVersion } from "../hooks/api.js";
+import { apiPatchTrack, apiUpdateConfig, fetchTelegramStatus, fetchVersion } from "../hooks/api.js";
 import type { ConductorConfig, Track, VersionInfo } from "../types.js";
 
 export function SettingsTab() {
 	const { showError, state } = useDashboard();
-	const [config, setConfig] = useState<ConductorConfig | null>(null);
+	const config = state.config; // SSE-synced via DashboardContext
 	const [version, setVersion] = useState<VersionInfo | null>(null);
 	const [tgConfigured, setTgConfigured] = useState<boolean | null>(null);
 
 	useEffect(() => {
 		async function load() {
 			try {
-				const [cfg, ver, tg] = await Promise.all([
-					fetchConfig(),
-					fetchVersion(),
-					fetchTelegramStatus(),
-				]);
-				setConfig(cfg);
+				const [ver, tg] = await Promise.all([fetchVersion(), fetchTelegramStatus()]);
 				setVersion(ver);
 				setTgConfigured(tg.configured);
 			} catch (e) {
@@ -71,7 +66,7 @@ export function SettingsTab() {
 										{t.description ?? <span className="settings-empty-cell">—</span>}
 									</span>
 									<span className="settings-track-agent mono">
-										{t.agentCmd ?? config.defaults.agentCmd ?? "—"}
+										{t.agentCmd ?? config?.defaults.agentCmd ?? "—"}
 									</span>
 									<span className="settings-track-cost">
 										{trackCost ? (
@@ -87,7 +82,7 @@ export function SettingsTab() {
 				</div>
 			</div>
 
-			{/* ── Right: meta + live stats ── */}
+			{/* ── Right: meta + editors ── */}
 			<div className="settings-col-side">
 				{/* Version */}
 				<div className="settings-section">
@@ -104,43 +99,14 @@ export function SettingsTab() {
 					</div>
 				</div>
 
-				{/* Defaults */}
-				<div className="settings-section">
-					<div className="settings-section-title">Defaults</div>
-					<div className="card settings-card">
-						<div className="settings-row">
-							<span className="settings-key">concurrency</span>
-							<span className="settings-val">{config?.defaults.concurrency ?? "—"}</span>
-						</div>
-						<div className="settings-row">
-							<span className="settings-key">agentCmd</span>
-							<span className="settings-val mono">{config?.defaults.agentCmd ?? "—"}</span>
-						</div>
-						{config?.defaults.agentArgs && (
-							<div className="settings-row">
-								<span className="settings-key">agentArgs</span>
-								<span className="settings-val mono">{config.defaults.agentArgs.join(" ")}</span>
-							</div>
-						)}
-					</div>
-				</div>
+				{/* Defaults editor */}
+				{config && <DefaultsEditor config={config} />}
 
-				{/* Integrations */}
-				<div className="settings-section">
-					<div className="settings-section-title">Integrations</div>
-					<div className="card settings-card">
-						<div className="settings-row">
-							<span className="settings-key">Telegram</span>
-							{tgConfigured === null ? (
-								<span className="settings-val">—</span>
-							) : (
-								<span className={`tg-pill ${tgConfigured ? "configured" : "unconfigured"}`}>
-									{tgConfigured ? "configured" : "not configured"}
-								</span>
-							)}
-						</div>
-					</div>
-				</div>
+				{/* Telegram editor */}
+				{config && <TelegramEditor config={config} tgConfigured={tgConfigured} />}
+
+				{/* Webhook editor */}
+				{config && <WebhookEditor config={config} />}
 
 				{/* Live session stats */}
 				{session.total > 0 && (
@@ -203,21 +169,339 @@ export function SettingsTab() {
 	);
 }
 
+// ─── DefaultsEditor ───────────────────────────────────────────────────────────
+
+function DefaultsEditor({ config }: { config: ConductorConfig }) {
+	const { showToast, showError } = useDashboard();
+	const [saving, setSaving] = useState(false);
+	const [confirming, setConfirming] = useState(false);
+	const [concurrency, setConcurrency] = useState(String(config.defaults.concurrency));
+	const [agentCmd, setAgentCmd] = useState(config.defaults.agentCmd);
+	const [agentArgs, setAgentArgs] = useState((config.defaults.agentArgs ?? []).join(" "));
+	const [fieldError, setFieldError] = useState<string | null>(null);
+
+	// Sync when config changes via SSE
+	useEffect(() => {
+		setConcurrency(String(config.defaults.concurrency));
+		setAgentCmd(config.defaults.agentCmd);
+		setAgentArgs((config.defaults.agentArgs ?? []).join(" "));
+	}, [config.defaults.concurrency, config.defaults.agentCmd, config.defaults.agentArgs]);
+
+	async function doSave() {
+		setConfirming(false);
+		setFieldError(null);
+		const concurrencyNum = parseInt(concurrency, 10);
+		if (Number.isNaN(concurrencyNum) || concurrencyNum < 1) {
+			setFieldError("Concurrency must be a positive integer");
+			return;
+		}
+		if (!agentCmd.trim()) {
+			setFieldError("agentCmd cannot be empty");
+			return;
+		}
+		setSaving(true);
+		try {
+			const args = agentArgs.trim() ? agentArgs.trim().split(/\s+/) : undefined;
+			await apiUpdateConfig({
+				defaults: { concurrency: concurrencyNum, agentCmd: agentCmd.trim(), agentArgs: args },
+			});
+			showToast("Defaults saved");
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : "Save failed";
+			setFieldError(msg);
+			showError(msg);
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<div className="settings-section">
+			<div className="settings-section-title">Defaults</div>
+			<div className="card settings-card">
+				<label className="track-settings-field" style={{ marginBottom: "8px" }}>
+					<span className="settings-key">concurrency</span>
+					<input
+						type="number"
+						min="1"
+						max="20"
+						value={concurrency}
+						onChange={(e) => setConcurrency(e.target.value)}
+						className="track-settings-input"
+					/>
+				</label>
+				<label className="track-settings-field" style={{ marginBottom: "8px" }}>
+					<span className="settings-key">agentCmd</span>
+					<input
+						type="text"
+						value={agentCmd}
+						onChange={(e) => setAgentCmd(e.target.value)}
+						className="track-settings-input mono"
+					/>
+				</label>
+				<label className="track-settings-field" style={{ marginBottom: "8px" }}>
+					<span className="settings-key">agentArgs</span>
+					<input
+						type="text"
+						placeholder="space separated"
+						value={agentArgs}
+						onChange={(e) => setAgentArgs(e.target.value)}
+						className="track-settings-input mono"
+					/>
+				</label>
+				{fieldError && (
+					<div className="settings-error" style={{ marginBottom: "8px" }}>
+						{fieldError}
+					</div>
+				)}
+				{confirming ? (
+					<div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+						<span className="settings-key" style={{ color: "var(--warn, #f59e0b)" }}>
+							Affects all tracks — continue?
+						</span>
+						<button type="button" className="btn-save-track" onClick={() => void doSave()}>
+							Confirm
+						</button>
+						<button
+							type="button"
+							className="btn-save-track"
+							style={{ background: "var(--surface-2, #2a2a3e)" }}
+							onClick={() => setConfirming(false)}
+						>
+							Cancel
+						</button>
+					</div>
+				) : (
+					<button
+						type="button"
+						className="btn-save-track"
+						disabled={saving}
+						onClick={() => setConfirming(true)}
+					>
+						{saving ? "Saving…" : "Save"}
+					</button>
+				)}
+			</div>
+		</div>
+	);
+}
+
+// ─── TelegramEditor ───────────────────────────────────────────────────────────
+
+function TelegramEditor({
+	config,
+	tgConfigured,
+}: {
+	config: ConductorConfig;
+	tgConfigured: boolean | null;
+}) {
+	const { showToast, showError } = useDashboard();
+	const [saving, setSaving] = useState(false);
+	const [showToken, setShowToken] = useState(false);
+	const [token, setToken] = useState(config.telegram?.token ?? "");
+	const [chatId, setChatId] = useState(
+		config.telegram?.chatId ? String(config.telegram.chatId) : "",
+	);
+	const [fieldError, setFieldError] = useState<string | null>(null);
+
+	useEffect(() => {
+		setToken(config.telegram?.token ?? "");
+		setChatId(config.telegram?.chatId ? String(config.telegram.chatId) : "");
+	}, [config.telegram?.token, config.telegram?.chatId]);
+
+	async function save() {
+		setFieldError(null);
+		if (!token.trim() && !chatId.trim()) {
+			setFieldError("Provide a token and chat ID to configure Telegram");
+			return;
+		}
+		const chatIdNum = parseInt(chatId, 10);
+		if (!token.trim() || Number.isNaN(chatIdNum)) {
+			setFieldError("Both token and numeric chat ID are required");
+			return;
+		}
+		setSaving(true);
+		try {
+			await apiUpdateConfig({ telegram: { token: token.trim(), chatId: chatIdNum } });
+			showToast("Telegram settings saved");
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : "Save failed";
+			setFieldError(msg);
+			showError(msg);
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<div className="settings-section">
+			<div className="settings-section-title">
+				Telegram
+				{tgConfigured !== null && (
+					<span className={`tg-pill ${tgConfigured ? "configured" : "unconfigured"}`}>
+						{tgConfigured ? "configured" : "not configured"}
+					</span>
+				)}
+			</div>
+			<div className="card settings-card">
+				<label className="track-settings-field" style={{ marginBottom: "8px" }}>
+					<span className="settings-key">token</span>
+					<div style={{ display: "flex", gap: "4px", flex: 1 }}>
+						<input
+							type={showToken ? "text" : "password"}
+							placeholder="Bot token"
+							value={token}
+							onChange={(e) => setToken(e.target.value)}
+							className="track-settings-input mono"
+						/>
+						<button
+							type="button"
+							className="btn-save-track"
+							style={{ flexShrink: 0 }}
+							onClick={() => setShowToken((v) => !v)}
+						>
+							{showToken ? "Hide" : "Show"}
+						</button>
+					</div>
+				</label>
+				<label className="track-settings-field" style={{ marginBottom: "8px" }}>
+					<span className="settings-key">chatId</span>
+					<input
+						type="text"
+						placeholder="Numeric chat ID"
+						value={chatId}
+						onChange={(e) => setChatId(e.target.value)}
+						className="track-settings-input mono"
+					/>
+				</label>
+				{fieldError && (
+					<div className="settings-error" style={{ marginBottom: "8px" }}>
+						{fieldError}
+					</div>
+				)}
+				<button
+					type="button"
+					className="btn-save-track"
+					disabled={saving}
+					onClick={() => void save()}
+				>
+					{saving ? "Saving…" : "Save"}
+				</button>
+			</div>
+		</div>
+	);
+}
+
+// ─── WebhookEditor ────────────────────────────────────────────────────────────
+
+function generateSecret(): string {
+	const bytes = new Uint8Array(32);
+	crypto.getRandomValues(bytes);
+	return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function WebhookEditor({ config }: { config: ConductorConfig }) {
+	const { showToast, showError } = useDashboard();
+	const [saving, setSaving] = useState(false);
+	const [showSecret, setShowSecret] = useState(false);
+	const [secret, setSecret] = useState(config.webhook?.secret ?? "");
+	const [fieldError, setFieldError] = useState<string | null>(null);
+
+	useEffect(() => {
+		setSecret(config.webhook?.secret ?? "");
+	}, [config.webhook?.secret]);
+
+	async function save() {
+		setFieldError(null);
+		setSaving(true);
+		try {
+			await apiUpdateConfig({ webhook: { secret: secret.trim() } });
+			showToast("Webhook secret saved");
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : "Save failed";
+			setFieldError(msg);
+			showError(msg);
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	function copySecret() {
+		void navigator.clipboard.writeText(secret).then(() => showToast("Copied to clipboard"));
+	}
+
+	return (
+		<div className="settings-section">
+			<div className="settings-section-title">Webhook</div>
+			<div className="card settings-card">
+				<label className="track-settings-field" style={{ marginBottom: "8px" }}>
+					<span className="settings-key">secret</span>
+					<div style={{ display: "flex", gap: "4px", flex: 1 }}>
+						<input
+							type={showSecret ? "text" : "password"}
+							placeholder="HMAC secret"
+							value={secret}
+							onChange={(e) => setSecret(e.target.value)}
+							className="track-settings-input mono"
+						/>
+						<button
+							type="button"
+							className="btn-save-track"
+							style={{ flexShrink: 0 }}
+							onClick={() => setShowSecret((v) => !v)}
+						>
+							{showSecret ? "Hide" : "Show"}
+						</button>
+					</div>
+				</label>
+				{fieldError && (
+					<div className="settings-error" style={{ marginBottom: "8px" }}>
+						{fieldError}
+					</div>
+				)}
+				<div style={{ display: "flex", gap: "8px" }}>
+					<button
+						type="button"
+						className="btn-save-track"
+						style={{ background: "var(--surface-2, #2a2a3e)" }}
+						onClick={() => {
+							const s = generateSecret();
+							setSecret(s);
+							showToast("New secret generated — save to apply");
+						}}
+					>
+						Regenerate
+					</button>
+					<button
+						type="button"
+						className="btn-save-track"
+						style={{ background: "var(--surface-2, #2a2a3e)" }}
+						disabled={!secret}
+						onClick={copySecret}
+					>
+						Copy
+					</button>
+					<button
+						type="button"
+						className="btn-save-track"
+						disabled={saving}
+						onClick={() => void save()}
+					>
+						{saving ? "Saving…" : "Save"}
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
 // ─── TrackSettingsEditor ──────────────────────────────────────────────────────
 
 function TrackSettingsEditor() {
-	const { showToast, showError } = useDashboard();
-	const [config, setConfig] = useState<ConductorConfig | null>(null);
+	const { showToast, showError, state } = useDashboard();
+	const config = state.config; // SSE-synced via DashboardContext
 	const [saving, setSaving] = useState<string | null>(null);
 	const [edits, setEdits] = useState<Record<string, Partial<Track>>>({});
-
-	useEffect(() => {
-		fetchConfig()
-			.then(setConfig)
-			.catch(() => {
-				/* ignore */
-			});
-	}, []);
 
 	if (!config?.tracks) return <div className="settings-loading">Loading config…</div>;
 

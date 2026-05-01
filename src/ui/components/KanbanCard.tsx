@@ -71,7 +71,7 @@ function badgeForWorker(
 }
 
 function duration(worker: WorkerState): string {
-	if (!worker.startedAt) return "";
+	if (worker.status === "pending" || worker.status === "queued" || !worker.startedAt) return "";
 	const start = new Date(worker.startedAt).getTime();
 	const end = worker.finishedAt ? new Date(worker.finishedAt).getTime() : Date.now();
 	if (Number.isNaN(start) || Number.isNaN(end)) return "";
@@ -113,26 +113,41 @@ export function KanbanCard({ trackId, worker, evalResult, trackPaused }: KanbanC
 
 	const shortId = worker.id.slice(0, 8);
 
+	function cardStatus(): string {
+		if (worker.status === "done" || worker.status === "failed") {
+			const passed = evalResult?.passed ?? worker.verifierPassed;
+			if (passed === true) return "pass";
+			if (passed === false) return "fail";
+			return "done";
+		}
+		if (worker.status === "pending") return "pending";
+		return "running";
+	}
+
+	const cs = cardStatus();
+
 	return (
-		<div className="card kanban-card">
+		<div className="card kanban-card" data-card-status={cs}>
 			<div className="kanban-card-top">
 				<div className="kanban-card-left">
 					<div className={statusDotClass(worker, evalResult)} />
-					<span className="kanban-card-title">{worker.contractTitle}</span>
+					{worker.contractTitle ? (
+						<span className="kanban-card-title">{worker.contractTitle}</span>
+					) : (
+						<span className="kanban-card-title kanban-card-title-id">{shortId}</span>
+					)}
 				</div>
 				{badgeForWorker(worker, evalResult, trackPaused)}
 			</div>
 			<div className="kanban-card-footer">
-				<div>
-					<span className="kanban-card-id mono">{shortId}</span>
+				<div className="kanban-card-meta">
+					{worker.contractTitle && <span className="kanban-card-id mono">{shortId}</span>}
 					{duration(worker) && (
-						<span className="kanban-card-id mono" style={{ marginLeft: 8 }}>
-							{duration(worker)}
-						</span>
+						<span className="kanban-card-duration mono">{duration(worker)}</span>
 					)}
 				</div>
 				<button type="button" className="kanban-log-toggle" onClick={toggleLog}>
-					{expanded ? "hide log ↑" : "logs ↓"}
+					{expanded ? "hide ↑" : "logs ↓"}
 				</button>
 			</div>
 			{expanded && (

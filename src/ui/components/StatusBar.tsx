@@ -1,3 +1,4 @@
+import { useDashboard } from "../context/DashboardContext.js";
 import type { TrackStatus } from "../types.js";
 
 interface StatusBarProps {
@@ -6,6 +7,8 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ tracks, lastUpdate }: StatusBarProps) {
+	const { selectedProjectId } = useDashboard();
+
 	let total = 0;
 	let done = 0;
 	let running = 0;
@@ -35,6 +38,11 @@ export function StatusBar({ tracks, lastUpdate }: StatusBarProps) {
 
 	return (
 		<footer className="status-bar">
+			{selectedProjectId && (
+				<div className="stat-item stat-project">
+					<span className="stat-project-name">{selectedProjectId}</span>
+				</div>
+			)}
 			<div className="stat-item">
 				<span>workers</span>
 				<span className="stat-value">{total}</span>

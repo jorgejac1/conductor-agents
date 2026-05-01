@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { parseCron, parseTodo } from "evalgate";
+import { resolvePlugin } from "../agents/index.js";
 import { configPath, loadConfig, trackTodoPath, validateConfig } from "../config.js";
 import { detectCycle } from "../orchestrator.js";
 import { c } from "./helpers.js";
@@ -178,18 +179,30 @@ export async function cmdDoctor(args: string[]): Promise<number> {
 		failed++;
 	}
 
-	// ── 6. Agent on PATH ─────────────────────────────────────────────────────────
+	// ── 6. Agent on PATH + plugin check ─────────────────────────────────────────
+	console.log(`\n${c.bold}Agent plugins${c.reset}`);
 	const agentCmds = new Set<string>([config.defaults.agentCmd]);
 	for (const track of config.tracks) {
 		if (track.agentCmd) agentCmds.add(track.agentCmd);
 	}
-	for (const cmd of agentCmds) {
+	for (const rawCmd of agentCmds) {
+		const binName = rawCmd.trim().split(/\s+/)[0] ?? rawCmd;
 		try {
-			execSync(`which ${cmd}`, { stdio: "ignore" });
-			check(`agent "${cmd}" found on PATH`, true);
+			execSync(`which ${binName}`, { stdio: "ignore" });
+			check(`agent "${binName}" found on PATH`, true);
 		} catch {
-			check(`agent "${cmd}" found on PATH`, false, "not found — install or set agentCmd");
+			check(`agent "${binName}" found on PATH`, false, "not found — install or set agentCmd");
 			failed++;
+		}
+		// Check plugin resolution — generic plugin means no token tracking
+		const plugin = await resolvePlugin(cwd, rawCmd);
+		if (plugin.id === "generic") {
+			warn(
+				`agent "${binName}" uses the generic plugin`,
+				`token usage will not be tracked — add a plugin at .conductor/plugins/${binName}.js`,
+			);
+		} else {
+			check(`agent "${binName}" plugin: ${plugin.id}`, true);
 		}
 	}
 

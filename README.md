@@ -9,7 +9,7 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Node 18+](https://img.shields.io/badge/node-18%2B-blue.svg)](#)
-[![v3.0.0](https://img.shields.io/badge/version-v3.0.0-brightgreen.svg)](#roadmap)
+[![v3.2.0](https://img.shields.io/badge/version-v3.2.0-brightgreen.svg)](#roadmap)
 
 ---
 
@@ -116,18 +116,20 @@ conductor status auth
 | `conductor plan diff` | Show diff of plan draft vs current tracks (added / removed / changed) |
 | `conductor plan apply [--dry-run] [--yes]` | Apply the generated plan draft — prompts for confirmation, `--yes` skips prompt |
 | `conductor plan show` | Print the current plan draft |
+| `conductor plan iterate [--auto] [--max-rounds=N]` | Re-generate plan based on real eval failures; `--auto` loops up to `--max-rounds` (default 3) |
 | `conductor report [track]` | Show cost report — tokens + estimated USD per track |
 | `conductor report --html [path]` | Export self-contained HTML report (graph snapshot, worker timeline, cost table) |
 | `conductor mcp` | Start MCP server (stdio) — control conductor from any Claude conversation |
 | `conductor schedule add <track> "<cron>"` | Add a cron schedule to a track |
 | `conductor schedule list` | Show all scheduled tracks with next fire time |
 | `conductor schedule rm <track>` | Remove schedule from a track |
-| `conductor schedule start` | Start the scheduling daemon (foreground) |
+| `conductor schedule start [--replay=collapse\|all\|skip]` | Start the scheduling daemon (foreground) — SQLite-backed, survives restarts |
 | `conductor webhook start [--port=9000]` | Start webhook server — `POST /webhook/<trackId>` triggers a run |
 | `conductor telegram setup` | Configure Telegram bot token + chat ID |
 | `conductor telegram [start]` | Start Telegram bot (foreground) |
 | `conductor ui [--port=8080]` | Start web dashboard |
 | `conductor doctor` | Health check config, tracks, and environment |
+| `conductor --version` | Print the installed version |
 | `conductor help` | Show usage |
 
 ### `conductor add` options
@@ -161,6 +163,34 @@ conductor run auth --agent="claude --dangerously-skip-permissions"
   }
 }
 ```
+
+### Using non-Claude agents
+
+`agentCmd` accepts any binary on your PATH. conductor passes the task prompt on stdin and the agent writes its work to the git worktree.
+
+```bash
+# OpenCode
+conductor run auth --agent="opencode"
+
+# Aider
+conductor run auth --agent="aider --yes"
+
+# Any custom script
+conductor run auth --agent="/path/to/my-agent.sh"
+```
+
+Per-agent settings can be baked into `config.json` so you don't repeat flags on every run:
+
+```json
+{
+  "defaults": {
+    "agentCmd": "opencode",
+    "agentArgs": ["--model", "claude-sonnet-4-5"]
+  }
+}
+```
+
+> **Agent plugins:** conductor v3.2 ships built-in plugins for Claude, OpenCode, aider, codex, and gemini-cli. Each plugin's `parseUsage()` extracts token counts from that agent's output format so the dashboard shows accurate spend for all agents, not just Claude. See [Agent Plugins](#agent-plugins) below.
 
 ### `conductor logs` options
 
@@ -274,6 +304,102 @@ conductor run --all
 The generated `todo.md` files are ready for `conductor run` — each task has a
 verifier that evalgate will run after the agent completes its work.
 
+### Plan iteration loop
+
+`conductor plan iterate` inspects the current swarm state for failed workers, collects their full eval output, and re-prompts the planner to revise the task breakdown. One round by default; `--auto` loops automatically:
+
+```bash
+# Single-shot: inspect failures and generate a revised draft
+conductor plan iterate
+
+# Auto-loop: iterate up to N rounds until all evals pass
+conductor plan iterate --auto --max-rounds=3
+```
+
+Each round:
+1. Collects all failed workers (status `failed` or `verifierPassed === false`) across all tracks
+2. Builds a structured prompt containing the full eval stdout + stderr for each failure (no truncation)
+3. Calls the planner agent to rewrite `plan-draft.md`
+4. Applies the draft and re-runs the affected tracks
+5. Stops early if no failures remain (`converged: true`)
+
+`--max-rounds` defaults to 3. Each round is a full planner LLM call plus a swarm run — factor in cost before setting a high cap.
+
+---
+
+## Scheduling
+
+Run tracks on a cron schedule. The daemon persists state to `.conductor/scheduler.db` so missed fires are replayed after a restart.
+
+```bash
+# Add a schedule (standard cron syntax)
+conductor schedule add auth "*/30 * * * *"   # every 30 minutes
+conductor schedule add payments "0 6 * * *"  # every day at 06:00 UTC
+
+# List scheduled tracks with last-fired time and next-fire time
+conductor schedule list
+
+# Remove a schedule
+conductor schedule rm auth
+
+# Start the daemon (foreground — use systemd/pm2/launchd for production)
+conductor schedule start
+
+# Control missed-fire behavior on startup (default: collapse)
+conductor schedule start --replay=collapse   # run the most recent missed slot once
+conductor schedule start --replay=all        # run every missed slot in order
+conductor schedule start --replay=skip       # discard missed slots, fire only on schedule
+```
+
+**Missed-fire replay** — if the daemon was down and missed hourly fires over a 6-hour window, `--replay=collapse` runs once (the last slot) and records the others as `replayed-skipped`. `--replay=all` runs all 6 serially. Use `all` only when idempotency is guaranteed; it can hammer the system after a long outage.
+
+**SQLite persistence** — each fire is recorded in `.conductor/scheduler.db` (`schedule_runs` table). Restart the daemon at any time without losing history.
+
+---
+
+## Webhooks
+
+Trigger a track run via HTTP — useful for GitHub push events, CI pipelines, and external automation.
+
+```bash
+# Start the webhook server (default port 9000)
+conductor webhook start
+
+# With a custom port
+conductor webhook start --port=8888
+```
+
+Endpoint: `POST /webhook/<trackId>` — responds 202 and queues the track run.
+
+### HMAC-SHA256 signing (recommended)
+
+Set a shared secret in `config.json` to require GitHub-compatible `X-Hub-Signature-256` on every inbound request:
+
+```json
+{
+  "webhook": {
+    "secret": "your-shared-secret"
+  }
+}
+```
+
+Or edit it live in the **Settings** tab of the dashboard without restarting the server.
+
+When a secret is configured:
+- Requests missing `X-Hub-Signature-256` → `401`
+- Requests with an incorrect signature → `401`
+- Valid signature + known track → `202`
+- Valid signature + unknown track → `404`
+
+When no secret is configured, all requests are accepted (warning printed to stderr on startup). The same HMAC contract applies to webhook calls routed through the dashboard server (`/api/webhook`).
+
+**GitHub setup:**
+1. In your GitHub repo → Settings → Webhooks → Add webhook
+2. Payload URL: `http://your-server:9000/webhook/<trackId>`
+3. Content type: `application/json`
+4. Secret: the value from `webhook.secret` in your config
+5. Select events (e.g. "Push")
+
 ---
 
 ## Web dashboard
@@ -313,7 +439,12 @@ The dashboard is a React app with the **Mission Control** design system — a bl
 
 **Activity** — per-track token spend chart. Shows cost accumulation over the session as a canvas bar chart.
 
-**Settings** — two-column layout: a live tracks table on the left (name, description, agent command, cost per track) and version / defaults / integrations / live session stats on the right. Session stats show total workers, done/failed/running counts, total tokens, and total estimated USD — updated live from SSE.
+**Settings** — editable config panel synced live via SSE. Three editor sections:
+- **Defaults** — concurrency, `agentCmd`, and `agentArgs`. Changing `agentCmd` here affects all tracks (confirmation dialog prevents accidental mistyping).
+- **Telegram** — bot token (masked) and chat ID. Save → immediately reflected in the running server.
+- **Webhook secret** — show/hide, copy to clipboard, and one-click regenerate (64-hex random). Set to empty to clear. All config changes broadcast a `config-changed` SSE event so other open tabs update instantly without a page reload.
+
+A live tracks table shows each track's name, description, agent command, and cost — click any row to edit that track's `maxUsd`, `maxTokens`, and `concurrency`.
 
 All updates stream live via SSE — no page refresh needed.
 
@@ -336,8 +467,9 @@ The web server (`conductor ui`) exposes a REST API used by the dashboard. You ca
 | `POST` | `/api/tracks/:id/resume` | Resume a paused track — clears the PAUSED marker and re-runs from pending state |
 | `POST` | `/api/tracks/:id/retry` | Retry a worker `{ workerId }` |
 | `POST` | `/api/tracks/:id/budget` | Record token usage `{ contractId, tokens, workerId? }` |
-| `GET` | `/api/events` | SSE stream — emits `tracks`, `swarm`, `cost`, `eval-result`, `worker-start`, `worker-retry`, `track-paused`, and `track-resumed` events |
+| `GET` | `/api/events` | SSE stream — emits `tracks`, `swarm`, `cost`, `eval-result`, `worker-start`, `worker-retry`, `track-paused`, `track-resumed`, and `config-changed` events |
 | `GET` | `/api/config` | Current conductor config |
+| `POST` | `/api/config` | Patch top-level config — accepts `{ defaults?, telegram?, webhook? }`; send `null` for a section to remove it |
 | `GET` | `/api/version` | `{ conductor, evalgate }` version strings |
 | `GET` | `/api/telegram-status` | `{ configured: boolean }` |
 
@@ -527,9 +659,131 @@ startServer
 // MCP
 startMcpServer
 // Planner
-generatePlan, applyPlan, parsePlanDraft, buildContextSnapshot
+generatePlan, applyPlan, parsePlanDraft, buildContextSnapshot, generatePlanIterate, runIterationLoop
+// Scheduler
+openSchedulerDb, computeMissedFires, replayMissed, recordFire, updateTrackState, getTrackState as getSchedulerTrackState
+// Webhook auth
+verifyHmac, readBody
 // Types
 ConductorConfig, Track, TrackStatus, TrackCostSummary, TelegramBotConfig
+```
+
+---
+
+## Memory vault
+
+conductor v3.2 adds a persistent memory system at `.conductor/memory/`. Agents write lessons, decisions, references, and failure patterns during runs — and those memories are automatically injected into future runs so agents don't rediscover the same things each time.
+
+### CLI
+
+```bash
+conductor memory list [--scope=global] [--type=lesson]
+conductor memory show <slug>
+conductor memory add --name=deadlock-fix --type=lesson --scope=global --body="Use SKIP LOCKED to avoid postgres deadlocks."
+conductor memory rm <slug>
+```
+
+### MCP tools (for agents)
+
+Agents access memory via 4 MCP tools exposed by `conductor mcp`:
+
+| Tool | Description |
+|------|-------------|
+| `write_memory` | Write a new memory (name, type, scope, body, optional tags) |
+| `read_memory` | List all memories, filtered by scope and/or type |
+| `search_memory` | Case-insensitive substring search across name + body + tags |
+| `list_memories` | Return slug array for all stored memories |
+
+### Memory types
+
+| Type | Description |
+|------|-------------|
+| `lesson` | Something learned through trial and error |
+| `decision` | Architecture or design decision with rationale |
+| `reference` | Pointer to external resource, doc, or API |
+| `failure-pattern` | Known failure mode to avoid or watch for |
+
+### Scope
+
+- `global` — available to all tracks in this project
+- `track:<id>` — scoped to a specific track (e.g. `track:auth`)
+
+Memories scoped to `global` + the current track are prepended to the agent's task context at run time. Total injected memory is capped at 8KB by default (oldest memories drop first if over budget). Override with `defaults.memoryBudgetBytes` in `config.json`.
+
+### Obsidian sync (optional)
+
+Add an `obsidian` section to `config.json` to enable sync with an Obsidian vault:
+
+```json
+{
+  "obsidian": {
+    "vaultPath": "/Users/you/Obsidian/MyVault",
+    "subfolder": "conductor",
+    "mode": "push"
+  }
+}
+```
+
+| Mode | Behavior |
+|------|----------|
+| `push` | After each track run, writes `<trackId>-<timestamp>.md` to the vault with outcome, cost, and token totals |
+| `pull` | At run start, reads `_context.md` from the vault subfolder and injects its contents into the agent's context |
+| `two-way` | Both push and pull |
+
+Check vault accessibility:
+
+```bash
+conductor obsidian status
+```
+
+---
+
+## Agent plugins
+
+conductor v3.2 ships a formal plugin spec so any agent CLI gets accurate token tracking in the dashboard.
+
+### Built-in plugins
+
+| Plugin | Command | Token parsing |
+|--------|---------|---------------|
+| `claude` | `claude` | `--output-format json` → `usage.input_tokens` / `output_tokens` |
+| `opencode` | `opencode` | stderr summary line `tokens: prompt=N response=M` |
+| `aider` | `aider` | stderr `Tokens: N sent, M received` |
+| `codex` | `codex` | structured JSON `usage` field |
+| `gemini` | `gemini` | JSON `usageMetadata.promptTokenCount` / `candidatesTokenCount` |
+| `generic` | (any) | Returns null — tokens reported as 0; one-time warning printed |
+
+```bash
+conductor agent list          # see all available plugins
+conductor agent info claude   # full details for one plugin
+conductor agent use opencode  # set defaults.agentCmd in config.json
+```
+
+### Custom plugins
+
+Drop a JS file at `.conductor/plugins/<name>.js` to add or override a plugin:
+
+```js
+// .conductor/plugins/myagent.js
+export default {
+  id: "myagent",
+  defaultCmd: "myagent",
+  defaultArgs: (task) => ["--task", task],
+  parseUsage(logContent, stderr) {
+    const m = stderr.match(/used (\d+) input tokens and (\d+) output tokens/);
+    if (!m) return null;
+    return { inputTokens: Number(m[1]), outputTokens: Number(m[2]) };
+  },
+  pricing: { input: 1.00, output: 5.00 }, // USD per 1M tokens
+};
+```
+
+The plugin is loaded automatically when `agentCmd` matches the filename. Custom plugins take precedence over built-ins. Plugins run with full Node privileges — only load files you wrote or trust.
+
+**Pricing override via env:**
+
+```bash
+CONDUCTOR_PRICING_CLAUDE_INPUT=2.50 conductor run auth
 ```
 
 ---
@@ -580,7 +834,9 @@ The image is based on `node:22-slim` with `git` installed (required for worktree
 | v2.2 | Budget guardrails — per-track `maxTokens` / `maxUsd` in `config.json`; breach pauses new workers and fires Telegram alert. Mobile-responsive layout. Activity tab drill-down tooltips | Shipped |
 | v2.3 | `conductor report --html` — self-contained HTML export (graph snapshot, worker timeline, cost table). `conductor plan diff` + `plan apply --yes` — diff mode shows added/removed/changed tracks before applying, `--yes` bypasses interactive prompt. Pause/Resume API (`POST /pause`, `POST /resume`) backed by `AbortSignal` in orchestrator — fixes budget-guardrail bug where new workers kept spawning after breach. History pagination (`?offset`, `?from`, `?to`, `?result`). MCP expanded to 12 tools (adds `get_logs`, `cancel_run`, `list_history`, `get_plan_diff`). Workers tab search + status filter pills. Kanban Pause/Resume button. | Shipped |
 | v3.0 | Workspace mode — multi-project workspace sidebar aggregating multiple `.conductor/` dirs with project switcher. Remote workers via SSH runner and Docker runner. `agentCmd` inline flag support (`"claude --dangerously-skip-permissions"`). Run button disabled with hint when track has no tasks. Activity tab bar chart track-name fix. evalgate ^3.0.0 (breaking: `BudgetExceededEvent` added to `SwarmEvent` union). | Shipped |
-| v3.1 | Persistent scheduler (SQLite-backed cron, missed-fire replay). Settings editor UI — in-dashboard config edits. Plan iteration loop — planner consumes eval output from trial run and refines tasks. Webhook HMAC signing + auth. | Planned |
+| v3.1 | Persistent scheduler (SQLite-backed cron, missed-fire replay with `collapse`/`all`/`skip` policies). Settings editor UI — in-dashboard edits for `defaults`, Telegram, and webhook secret with live SSE sync. Plan iteration auto-loop (`conductor plan iterate --auto --max-rounds=N`). Webhook HMAC signing + auth — shared `verifyHmac` with `timingSafeEqual` across dashboard and standalone webhook server. evalgate ^3.1.0 (SQLite budget log, `compactLogs`, LLM provider retry, `Contract.weight` tiebreaker). | Shipped |
+| v3.2 | Memory vault (`.conductor/memory/` — write/read/search/list via 4 new MCP tools + `conductor memory` CLI). Agent plugin spec — built-in plugins for claude/opencode/aider/codex/gemini with per-agent `parseUsage()` for accurate token tracking. Optional Obsidian sync (push run summaries, pull `_context.md`). evalgate ^3.2.0 (`parseUsage` hook on `runSwarm`). | Shipped |
+| v3.3 | Memory UI editor (create/edit/delete from dashboard). Memory TTL + pinning. Agent plugin marketplace. Plan iteration with memory feedback loop. | Planned |
 
 ---
 

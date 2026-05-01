@@ -62,7 +62,7 @@ function initedDir(): string {
 	const cfgPath = join(dir, ".conductor", "config.json");
 	const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as { defaults: { agentCmd: string } };
 	cfg.defaults.agentCmd = "node";
-	writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+	writeFileSync(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`);
 	return dir;
 }
 
@@ -74,13 +74,11 @@ function output(r: CliResult): string {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("--version / --help", () => {
-	// NOTE: --version is not currently wired in cli.ts (falls through to
-	// the default "Unknown command" path). This test documents the current
-	// behavior so any future implementation is detected as a behaviour change.
-	it("should exit 1 for unknown --version flag (not yet implemented)", () => {
+	it("should print the version number and exit 0 for --version", () => {
 		const r = conductor(["--version"], process.cwd());
-		assert.strictEqual(r.code, 1);
-		assert.match(output(r), /Unknown command/i);
+		assert.strictEqual(r.code, 0);
+		// Version must be a semver-ish string (e.g. "3.1.0")
+		assert.match(output(r).trim(), /^\d+\.\d+\.\d+/);
 	});
 
 	it("should print Usage and exit 0 for --help", () => {

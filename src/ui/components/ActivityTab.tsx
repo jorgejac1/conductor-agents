@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ActivityLogEntry } from "../context/DashboardContext.js";
 import { useDashboard } from "../context/DashboardContext.js";
+import { HistoryTab } from "./HistoryTab.js";
 import { SpendChart } from "./SpendChart.js";
 
 const EVENT_TYPES = [
@@ -89,6 +90,7 @@ export function ActivityTab() {
 	const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 	const [eventTypeFilter, setEventTypeFilter] = useState<EventTypeFilter>("all");
 	const [searchQuery, setSearchQuery] = useState("");
+	const [subTab, setSubTab] = useState<"events" | "runs" | "spend">("events");
 
 	function toggleRow(index: number): void {
 		setExpandedRows((prev) => {
@@ -153,143 +155,165 @@ export function ActivityTab() {
 	}, [activityLog, eventTypeFilter, searchQuery]);
 
 	return (
-		<div className="activity-layout">
-			<div className="activity-grid">
-				{/* Total spend card */}
-				<div className="card activity-card">
-					<div className="activity-card-title">Total Spend</div>
-					<div className="activity-stat-row">
-						<span className="activity-stat-value">${totalUsd.toFixed(4)}</span>
-						<span className="activity-stat-unit">USD</span>
-					</div>
-					<div className="activity-stat-sub">{totalTokens.toLocaleString()} tokens</div>
-					<div className="spend-chart-wrap">
-						<SpendChart bars={chartBars} maxValue={chartMax} />
-					</div>
-				</div>
+		<div className="activity-wrap">
+			<div className="activity-subtabs">
+				{(["events", "runs", "spend"] as const).map((s) => (
+					<button
+						key={s}
+						type="button"
+						className={`activity-subtab${subTab === s ? " active" : ""}`}
+						onClick={() => setSubTab(s)}
+					>
+						{s === "events" ? "Events" : s === "runs" ? "Runs" : "Spend"}
+					</button>
+				))}
+			</div>
 
-				{/* Per-track breakdown */}
-				<div className="card activity-card">
-					<div className="activity-card-title">By Track</div>
-					{trackCosts.length === 0 ? (
-						<div className="activity-empty">No cost data yet. Run a track to see spend here.</div>
+			{subTab === "events" && (
+				<div className="activity-event-feed card">
+					<div
+						style={{
+							display: "flex",
+							alignItems: "center",
+							gap: 8,
+							padding: "14px 16px 8px",
+							flexWrap: "wrap",
+						}}
+					>
+						<div className="activity-card-title" style={{ marginRight: "auto" }}>
+							Event Feed
+						</div>
+						<input
+							type="text"
+							placeholder="Search events…"
+							className="workers-search"
+							style={{ width: 160, fontSize: 11 }}
+							value={searchQuery}
+							onChange={(e) => setSearchQuery(e.target.value)}
+						/>
+						<button
+							type="button"
+							className="btn btn-sm"
+							onClick={logPaused ? resumeLog : pauseLog}
+							title={logPaused ? "Resume log" : "Pause log"}
+						>
+							{logPaused ? "▶ Resume" : "⏸ Pause"}
+						</button>
+						<button type="button" className="btn btn-sm" onClick={clearLog} title="Clear log">
+							✕ Clear
+						</button>
+					</div>
+					<div
+						className="filter-pills"
+						style={{ padding: "0 16px 8px", flexWrap: "wrap", display: "flex", gap: 4 }}
+					>
+						{EVENT_TYPES.map((t) => (
+							<button
+								key={t}
+								type="button"
+								className={`filter-pill${eventTypeFilter === t ? " active" : ""}`}
+								onClick={() => setEventTypeFilter(t)}
+								style={{ fontSize: 10 }}
+							>
+								{t}
+							</button>
+						))}
+					</div>
+					{reversedLog.length === 0 ? (
+						<div className="activity-empty" style={{ padding: "12px 16px 16px" }}>
+							{activityLog.length === 0
+								? "No events yet. Start a track run to see live events here."
+								: "No events match the current filter."}
+						</div>
 					) : (
-						<div className="track-cost-list">
-							{trackCosts.map((t) => (
-								<div key={t.id} className="track-cost-row">
-									<span className="track-cost-name">{t.name}</span>
-									<div className="track-cost-bar-wrap">
-										<div
-											className="track-cost-bar-fill"
-											style={{
-												width: maxUsd > 0 ? `${(t.usd / maxUsd) * 100}%` : "0%",
-												background: t.color,
-											}}
-										/>
-									</div>
-									<span className="track-cost-usd">${t.usd.toFixed(4)}</span>
-								</div>
+						<div className="activity-event-list">
+							{reversedLog.map((entry) => (
+								<EventRow
+									key={entry.index}
+									entry={entry}
+									expanded={expandedRows.has(entry.index)}
+									onToggle={() => toggleRow(entry.index)}
+								/>
 							))}
 						</div>
 					)}
 				</div>
+			)}
 
-				{/* Tokens card */}
-				{totalTokens > 0 && (
-					<div className="card activity-card">
-						<div className="activity-card-title">Token Usage</div>
-						<div className="track-cost-list">
-							{trackCosts.map((t) => (
-								<div key={t.id} className="track-cost-row">
-									<span className="track-cost-name">{t.name}</span>
-									<div className="track-cost-bar-wrap">
-										<div
-											className="track-cost-bar-fill"
-											style={{
-												width: totalTokens > 0 ? `${(t.tokens / totalTokens) * 100}%` : "0%",
-												background: t.color,
-											}}
-										/>
-									</div>
-									<span className="track-cost-usd" style={{ width: 70 }}>
-										{t.tokens.toLocaleString()}
-									</span>
-								</div>
-							))}
+			{subTab === "runs" && <HistoryTab />}
+
+			{subTab === "spend" && (
+				<div className="activity-layout">
+					<div className="activity-grid">
+						{/* Total spend card */}
+						<div className="card activity-card">
+							<div className="activity-card-title">Total Spend</div>
+							<div className="activity-stat-row">
+								<span className="activity-stat-value">${totalUsd.toFixed(4)}</span>
+								<span className="activity-stat-unit">USD</span>
+							</div>
+							<div className="activity-stat-sub">{totalTokens.toLocaleString()} tokens</div>
+							<div className="spend-chart-wrap">
+								<SpendChart bars={chartBars} maxValue={chartMax} />
+							</div>
 						</div>
-					</div>
-				)}
-			</div>
 
-			{/* Event feed with expandable rows */}
-			<div className="activity-event-feed card">
-				<div
-					style={{
-						display: "flex",
-						alignItems: "center",
-						gap: 8,
-						padding: "14px 16px 8px",
-						flexWrap: "wrap",
-					}}
-				>
-					<div className="activity-card-title" style={{ marginRight: "auto" }}>
-						Event Feed
+						{/* Per-track breakdown */}
+						<div className="card activity-card">
+							<div className="activity-card-title">By Track</div>
+							{trackCosts.length === 0 ? (
+								<div className="activity-empty">
+									No cost data yet. Run a track to see spend here.
+								</div>
+							) : (
+								<div className="track-cost-list">
+									{trackCosts.map((t) => (
+										<div key={t.id} className="track-cost-row">
+											<span className="track-cost-name">{t.name}</span>
+											<div className="track-cost-bar-wrap">
+												<div
+													className="track-cost-bar-fill"
+													style={{
+														width: maxUsd > 0 ? `${(t.usd / maxUsd) * 100}%` : "0%",
+														background: t.color,
+													}}
+												/>
+											</div>
+											<span className="track-cost-usd">${t.usd.toFixed(4)}</span>
+										</div>
+									))}
+								</div>
+							)}
+						</div>
+
+						{/* Tokens card */}
+						{totalTokens > 0 && (
+							<div className="card activity-card">
+								<div className="activity-card-title">Token Usage</div>
+								<div className="track-cost-list">
+									{trackCosts.map((t) => (
+										<div key={t.id} className="track-cost-row">
+											<span className="track-cost-name">{t.name}</span>
+											<div className="track-cost-bar-wrap">
+												<div
+													className="track-cost-bar-fill"
+													style={{
+														width: totalTokens > 0 ? `${(t.tokens / totalTokens) * 100}%` : "0%",
+														background: t.color,
+													}}
+												/>
+											</div>
+											<span className="track-cost-usd" style={{ width: 70 }}>
+												{t.tokens.toLocaleString()}
+											</span>
+										</div>
+									))}
+								</div>
+							</div>
+						)}
 					</div>
-					<input
-						type="text"
-						placeholder="Search events…"
-						className="workers-search"
-						style={{ width: 160, fontSize: 11 }}
-						value={searchQuery}
-						onChange={(e) => setSearchQuery(e.target.value)}
-					/>
-					<button
-						type="button"
-						className="btn btn-sm"
-						onClick={logPaused ? resumeLog : pauseLog}
-						title={logPaused ? "Resume log" : "Pause log"}
-					>
-						{logPaused ? "▶ Resume" : "⏸ Pause"}
-					</button>
-					<button type="button" className="btn btn-sm" onClick={clearLog} title="Clear log">
-						✕ Clear
-					</button>
 				</div>
-				<div
-					className="filter-pills"
-					style={{ padding: "0 16px 8px", flexWrap: "wrap", display: "flex", gap: 4 }}
-				>
-					{EVENT_TYPES.map((t) => (
-						<button
-							key={t}
-							type="button"
-							className={`filter-pill${eventTypeFilter === t ? " active" : ""}`}
-							onClick={() => setEventTypeFilter(t)}
-							style={{ fontSize: 10 }}
-						>
-							{t}
-						</button>
-					))}
-				</div>
-				{reversedLog.length === 0 ? (
-					<div className="activity-empty" style={{ padding: "12px 16px 16px" }}>
-						{activityLog.length === 0
-							? "No events yet. Start a track run to see live events here."
-							: "No events match the current filter."}
-					</div>
-				) : (
-					<div className="activity-event-list">
-						{reversedLog.map((entry) => (
-							<EventRow
-								key={entry.index}
-								entry={entry}
-								expanded={expandedRows.has(entry.index)}
-								onToggle={() => toggleRow(entry.index)}
-							/>
-						))}
-					</div>
-				)}
-			</div>
+			)}
 		</div>
 	);
 }

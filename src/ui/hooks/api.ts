@@ -1,5 +1,6 @@
 import type {
 	ConductorConfig,
+	MemoryEntry,
 	ProjectEntry,
 	RunRecord,
 	TrackStatus,
@@ -41,6 +42,16 @@ export async function fetchHistory(
 
 export async function fetchConfig(): Promise<ConductorConfig> {
 	return json<ConductorConfig>("/api/config");
+}
+
+export async function apiUpdateConfig(
+	patch: Partial<Pick<ConductorConfig, "defaults" | "telegram" | "webhook">>,
+): Promise<{ ok: boolean }> {
+	return json<{ ok: boolean }>("/api/config", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(patch),
+	});
 }
 
 export async function fetchVersion(): Promise<VersionInfo> {
@@ -104,6 +115,10 @@ export async function fetchWorkspaceProjects(): Promise<ProjectEntry[]> {
 	return json<ProjectEntry[]>("/api/workspace/projects");
 }
 
+export async function fetchProjectTracks(projectId: string): Promise<TrackStatus[]> {
+	return json<TrackStatus[]>(`/api/workspace/projects/${projectId}/tracks`);
+}
+
 export async function apiInitProject(
 	projectId: string,
 	opts: { goal?: string } = {},
@@ -131,4 +146,20 @@ export async function apiPatchTrack(
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(patch),
 	});
+}
+
+export async function fetchMemories(
+	opts: { scope?: string; type?: string } = {},
+): Promise<MemoryEntry[]> {
+	const params = new URLSearchParams();
+	if (opts.scope) params.set("scope", opts.scope);
+	if (opts.type) params.set("type", opts.type);
+	const qs = params.toString();
+	const result = await json<{ memories: MemoryEntry[] }>(`/api/memory${qs ? `?${qs}` : ""}`);
+	return result.memories;
+}
+
+export async function fetchMemory(slug: string): Promise<MemoryEntry> {
+	const result = await json<{ memory: MemoryEntry }>(`/api/memory/${encodeURIComponent(slug)}`);
+	return result.memory;
 }

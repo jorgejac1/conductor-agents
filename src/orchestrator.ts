@@ -13,7 +13,10 @@ import {
 
 export type { BudgetExceededEvent } from "evalgate";
 
+import { resolvePlugin } from "./agents/index.js";
 import { loadConfig, trackContextPath, trackTodoPath } from "./config.js";
+import { formatMemoriesForPrompt, loadMemory } from "./memory.js";
+import { obsidianSync } from "./obsidian.js";
 import { buildRunner } from "./runners/index.js";
 import { getTrack } from "./track.js";
 import type { Track } from "./types.js";
@@ -115,14 +118,33 @@ export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<Swa
 
 	const todoPath = trackTodoPath(id, cwd);
 	const ctxPath = trackContextPath(id, cwd);
-	const taskContext = existsSync(ctxPath) ? readFileSync(ctxPath, "utf8") : undefined;
+	const rawContext = existsSync(ctxPath) ? readFileSync(ctxPath, "utf8") : undefined;
+
+	// Inject memory vault content before CONTEXT.md
+	const memoryBudget = config?.defaults.memoryBudgetBytes ?? 8192;
+	const globalMems = loadMemory(cwd, { scope: "global" });
+	const trackMems = loadMemory(cwd, { scope: `track:${id}` });
+	const memorySection = formatMemoriesForPrompt([...globalMems, ...trackMems], memoryBudget);
+
+	// Obsidian pull: inject _context.md content between memory section and CONTEXT.md
+	const obsidianCtx =
+		config?.obsidian && (config.obsidian.mode === "pull" || config.obsidian.mode === "two-way")
+			? obsidianSync(config.obsidian, "pull")
+			: undefined;
+
+	const parts = [memorySection, obsidianCtx, rawContext].filter(Boolean);
+	const taskContext = parts.length > 0 ? parts.join("\n\n---\n\n") : undefined;
 
 	const rawCmd = opts.agentCmd ?? track.agentCmd ?? config?.defaults.agentCmd ?? "claude";
 	const { cmd: agentCmd, extraFlags } = resolveAgentCmd(rawCmd);
-	const resolvedAgentArgs = buildAgentArgs(
-		extraFlags,
-		track.agentArgs ?? config?.defaults.agentArgs,
-	);
+
+	// Resolve the agent plugin for token parsing
+	const plugin = await resolvePlugin(cwd, rawCmd);
+
+	// If no agentArgs configured, use the plugin's defaults (so non-claude agents
+	// get correct args without the user having to set agentArgs manually).
+	const configuredAgentArgs = track.agentArgs ?? config?.defaults.agentArgs;
+	const resolvedAgentArgs = buildAgentArgs(extraFlags, configuredAgentArgs ?? plugin.defaultArgs());
 
 	const controller = new AbortController();
 	activeControllers.set(id, controller);
@@ -157,6 +179,7 @@ export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<Swa
 		...(taskContext !== undefined && { taskContext }),
 		resume: opts.resume ?? false,
 		signal: controller.signal,
+		parseUsage: plugin.parseUsage.bind(plugin),
 		runner: buildRunner(track),
 		// Check budget after each worker completes and abort the remaining queue if
 		// the track limit is exceeded. onBudgetExceeded only fires for contract-level
@@ -180,7 +203,29 @@ export async function runTrack(id: string, opts: RunTrackOpts = {}): Promise<Swa
 	};
 
 	try {
-		return await runSwarm(swarmOpts);
+		const result = await runSwarm(swarmOpts);
+		// Obsidian push: write run summary to vault after the swarm finishes
+		if (
+			config?.obsidian &&
+			(config.obsidian.mode === "push" || config.obsidian.mode === "two-way")
+		) {
+			const records = queryBudgetRecords(todoPath);
+			const totalTokens = records.reduce((s, r) => s + r.tokens, 0);
+			const totalInput = records.reduce((s, r) => s + (r.inputTokens ?? 0), 0);
+			const totalOutput = records.reduce((s, r) => s + (r.outputTokens ?? 0), 0);
+			const totalUsd = estimateUsd(totalInput, totalOutput);
+			const todoSource = existsSync(todoPath) ? readFileSync(todoPath, "utf8") : "";
+			const todo = parseTodo(todoSource);
+			obsidianSync(config.obsidian, "push", {
+				trackId: id,
+				todoTotal: todo.length,
+				todoDone: result.done,
+				passed: result.failed === 0,
+				estimatedUsd: totalUsd,
+				totalTokens,
+			});
+		}
+		return result;
 	} finally {
 		activeControllers.delete(id);
 	}
@@ -197,13 +242,20 @@ export async function retryTrackWorker(
 	const todoPath = trackTodoPath(id, cwd);
 	const rawCmd = opts.agentCmd ?? track.agentCmd ?? config?.defaults.agentCmd ?? "claude";
 	const { cmd: agentCmd, extraFlags } = resolveAgentCmd(rawCmd);
-	const resolvedAgentArgs = buildAgentArgs(
-		extraFlags,
-		track.agentArgs ?? config?.defaults.agentArgs,
-	);
+	const plugin = await resolvePlugin(cwd, rawCmd);
+	const configuredAgentArgs = track.agentArgs ?? config?.defaults.agentArgs;
+	const resolvedAgentArgs = buildAgentArgs(extraFlags, configuredAgentArgs ?? plugin.defaultArgs());
 
 	const ctxPath = trackContextPath(id, cwd);
-	const taskContext = existsSync(ctxPath) ? readFileSync(ctxPath, "utf8") : undefined;
+	const rawContext = existsSync(ctxPath) ? readFileSync(ctxPath, "utf8") : undefined;
+	const memoryBudget = config?.defaults.memoryBudgetBytes ?? 8192;
+	const globalMems = loadMemory(cwd, { scope: "global" });
+	const trackMems = loadMemory(cwd, { scope: `track:${id}` });
+	const memorySection = formatMemoriesForPrompt([...globalMems, ...trackMems], memoryBudget);
+	const taskContext =
+		memorySection && rawContext
+			? `${memorySection}\n\n---\n\n${rawContext}`
+			: memorySection || rawContext;
 
 	// Resolve prefix to full worker ID
 	const state = await loadState(todoPath);
@@ -215,6 +267,7 @@ export async function retryTrackWorker(
 		agentCmd,
 		...(resolvedAgentArgs !== undefined && { agentArgs: resolvedAgentArgs }),
 		...(taskContext !== undefined && { taskContext }),
+		parseUsage: plugin.parseUsage.bind(plugin),
 	});
 }
 

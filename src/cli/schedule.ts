@@ -1,5 +1,13 @@
 import { runTrack } from "../orchestrator.js";
-import { c, positionalArgs } from "./helpers.js";
+import {
+	computeMissedFires,
+	openSchedulerDb,
+	type ReplayPolicy,
+	recordFire,
+	replayMissed,
+	updateTrackState,
+} from "../scheduler.js";
+import { c, parseFlags, positionalArgs } from "./helpers.js";
 
 async function cmdScheduleAdd(args: string[]): Promise<number> {
 	const { parseCron, nextFireMs } = await import("evalgate");
@@ -120,10 +128,13 @@ async function cmdScheduleRm(args: string[]): Promise<number> {
 	return 0;
 }
 
-async function cmdScheduleStart(): Promise<number> {
+async function cmdScheduleStart(args: string[]): Promise<number> {
 	const { parseCron, nextFireMs } = await import("evalgate");
 	const { loadConfig } = await import("../config.js");
+	const flags = parseFlags(args);
 	const cwd = process.cwd();
+	const replayPolicy: ReplayPolicy =
+		flags.replay === "all" ? "all" : flags.replay === "skip" ? "skip" : "collapse";
 
 	const config = loadConfig(cwd);
 	if (!config) {
@@ -139,7 +150,54 @@ async function cmdScheduleStart(): Promise<number> {
 		return 0;
 	}
 
+	const db = openSchedulerDb(cwd);
 	const timers = new Map<string, ReturnType<typeof setTimeout>>();
+
+	// Replay any missed fires from the last run
+	for (const track of initially) {
+		const cronStr = track.schedule ?? "";
+		let expr: ReturnType<typeof parseCron>;
+		try {
+			expr = parseCron(cronStr);
+		} catch {
+			continue;
+		}
+		const saved = db.prepare("SELECT * FROM schedule_state WHERE track_id = ?").get(track.id) as
+			| { last_fired_at: string | null }
+			| undefined;
+		const lastFiredAt = saved?.last_fired_at ?? null;
+		const missed = computeMissedFires(lastFiredAt, new Date(), expr, nextFireMs);
+
+		if (missed.length > 0) {
+			console.log(
+				`[scheduler] "${track.id}": ${missed.length} missed fire(s) — replaying (policy: ${replayPolicy})`,
+			);
+			await replayMissed(db, track.id, missed, replayPolicy, async (trackId, scheduledFor) => {
+				process.stdout.write(
+					`[scheduler] replaying missed fire for "${trackId}" (${scheduledFor})…\n`,
+				);
+				try {
+					await runTrack(trackId, { cwd });
+					return "success";
+				} catch {
+					return "failure";
+				}
+			});
+			const lastMissed = missed[missed.length - 1];
+			if (lastMissed) {
+				const nextMs = nextFireMs(expr, lastMissed);
+				const nextAt = new Date(lastMissed.getTime() + nextMs);
+				updateTrackState(
+					db,
+					track.id,
+					cronStr,
+					lastMissed.toISOString(),
+					nextAt.toISOString(),
+					true,
+				);
+			}
+		}
+	}
 
 	function scheduleTrack(trackId: string, cronExpr: string): void {
 		let expr: ReturnType<typeof parseCron>;
@@ -149,15 +207,18 @@ async function cmdScheduleStart(): Promise<number> {
 			console.error(`[scheduler] Invalid cron for "${trackId}": ${cronExpr}`);
 			return;
 		}
-		const ms = nextFireMs(expr);
+		const ms = nextFireMs(expr, new Date());
 		const next = new Date(Date.now() + ms);
 		console.log(
 			`  ${c.bold}${trackId.padEnd(20)}${c.reset} ${c.cyan}${cronExpr.padEnd(22)}${c.reset} next: ${next.toLocaleString()}`,
 		);
+		updateTrackState(db, trackId, cronExpr, null, next.toISOString(), true);
 
 		const timer = setTimeout(async () => {
 			timers.delete(trackId);
+			const firedAt = new Date();
 			process.stdout.write(`\n[scheduler] Firing "${c.bold}${trackId}${c.reset}"…\n`);
+			let success = false;
 			try {
 				const result = await runTrack(trackId, { cwd });
 				const done = result.state.workers.filter((w) => w.status === "done").length;
@@ -165,15 +226,34 @@ async function cmdScheduleStart(): Promise<number> {
 				const doneStr = done > 0 ? `${c.green}${done} done${c.reset}` : `${done} done`;
 				const failedStr = failed > 0 ? `${c.red}${failed} failed${c.reset}` : `${failed} failed`;
 				console.log(`[scheduler] "${trackId}" complete: ${doneStr}, ${failedStr}`);
-			} catch (err) {
-				console.error(
-					`[scheduler] Error running "${trackId}": ${err instanceof Error ? err.message : String(err)}`,
+				success = failed === 0;
+				recordFire(
+					db,
+					trackId,
+					next.toISOString(),
+					firedAt.toISOString(),
+					success ? "success" : "failure",
 				);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`[scheduler] Error running "${trackId}": ${msg}`);
+				recordFire(db, trackId, next.toISOString(), firedAt.toISOString(), "failure", msg);
 			}
 			// Re-read config after run — picks up schedule changes
 			const fresh = loadConfig(cwd);
 			const freshTrack = fresh?.tracks.find((t) => t.id === trackId);
 			if (freshTrack?.schedule) {
+				const freshExpr = parseCron(freshTrack.schedule);
+				const nextMs = nextFireMs(freshExpr, new Date());
+				const nextAt = new Date(Date.now() + nextMs);
+				updateTrackState(
+					db,
+					trackId,
+					freshTrack.schedule,
+					firedAt.toISOString(),
+					nextAt.toISOString(),
+					success,
+				);
 				scheduleTrack(trackId, freshTrack.schedule);
 			}
 		}, ms);
@@ -211,13 +291,13 @@ export async function cmdSchedule(args: string[]): Promise<number> {
 		case "remove":
 			return cmdScheduleRm(args.slice(1));
 		case "start":
-			return cmdScheduleStart();
+			return cmdScheduleStart(args.slice(1));
 		default:
 			console.error("Usage:");
 			console.error('  conductor schedule add <track> "<cron>"');
 			console.error("  conductor schedule list");
 			console.error("  conductor schedule rm <track>");
-			console.error("  conductor schedule start");
+			console.error("  conductor schedule start [--replay=collapse|all|skip]");
 			return 1;
 	}
 }

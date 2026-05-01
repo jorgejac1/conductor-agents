@@ -48,18 +48,28 @@ export interface Track {
 	runnerConfig?: SSHRunnerConfig | DockerRunnerConfig;
 }
 
+export interface ObsidianConfig {
+	vaultPath: string;
+	subfolder?: string;
+	mode: "push" | "pull" | "two-way";
+}
+
 export interface ConductorConfig {
 	tracks: Track[];
 	defaults: {
 		concurrency: number; // 3
 		agentCmd: string; // "claude"
 		agentArgs?: string[]; // global default agentArgs; overridden per-track
+		/** Max bytes of memory content prepended to each worker prompt. Default: 8192. */
+		memoryBudgetBytes?: number;
 	};
 	telegram?: TelegramBotConfig;
 	webhook?: {
 		/** HMAC-SHA256 secret for validating X-Hub-Signature-256 on inbound webhooks */
 		secret?: string;
 	};
+	/** Optional Obsidian vault sync. Push run summaries and/or pull extra context. */
+	obsidian?: ObsidianConfig;
 }
 
 export interface TrackCostSummary {

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { applyPlan, diffPlan, generatePlan, parsePlanDraft } from "../planner.js";
+import { applyPlan, diffPlan, generatePlan, parsePlanDraft, runIterationLoop } from "../planner.js";
 import { c, parseFlags, positionalArgs } from "./helpers.js";
 
 function printDiff(diff: ReturnType<typeof diffPlan>): void {
@@ -42,6 +42,24 @@ export async function cmdPlan(args: string[]): Promise<number> {
 
 	try {
 		if (sub === "iterate") {
+			const autoMode = flags.auto === true;
+			const maxRounds = flags["max-rounds"] ? Number(flags["max-rounds"]) : 3;
+
+			if (autoMode) {
+				const { loadConfig } = await import("../config.js");
+				const cfg = loadConfig(cwd);
+				const agentCmd = cfg?.defaults?.agentCmd ?? undefined;
+				const opts: { maxRounds: number; agentCmd?: string } = { maxRounds };
+				if (agentCmd !== undefined) opts.agentCmd = agentCmd;
+				const { rounds, converged } = await runIterationLoop(cwd, opts);
+				console.log(
+					converged
+						? `\n${c.green}converged${c.reset} after ${rounds} round(s)`
+						: `\n${c.yellow}max rounds reached${c.reset} (${rounds}/${maxRounds}) — failures remain`,
+				);
+				return converged ? 0 : 1;
+			}
+
 			const { generatePlanIterate } = await import("../planner.js");
 			const result = await generatePlanIterate(cwd);
 			if (!result) {
@@ -116,7 +134,7 @@ export async function cmdPlan(args: string[]): Promise<number> {
 			console.error("       conductor plan apply [--yes] [--dry-run]");
 			console.error("       conductor plan diff");
 			console.error("       conductor plan show");
-			console.error("       conductor plan iterate");
+			console.error("       conductor plan iterate [--auto] [--max-rounds=N]");
 			return 1;
 		}
 

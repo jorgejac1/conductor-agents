@@ -16,12 +16,15 @@
  */
 
 import { cmdAdd } from "./cli/add.js";
+import { cmdAgent } from "./cli/agent.js";
 import { cmdDiagnose } from "./cli/diagnose.js";
 import { cmdDoctor } from "./cli/doctor.js";
 import { c, positionalArgs } from "./cli/helpers.js";
 import { cmdInit } from "./cli/init.js";
 import { cmdList } from "./cli/list.js";
 import { cmdLogs } from "./cli/logs.js";
+import { cmdMemory } from "./cli/memory.js";
+import { cmdObsidian } from "./cli/obsidian.js";
 import { cmdPlan } from "./cli/plan.js";
 import { cmdReport } from "./cli/report.js";
 import { cmdRetry } from "./cli/retry.js";
@@ -64,6 +67,15 @@ Usage:
   conductor schedule rm <track>               Remove schedule from a track
   conductor schedule start                    Start the scheduling daemon (foreground)
   conductor webhook start [--port=9000]       Start webhook server (POST /webhook/<track>)
+  conductor memory list [--scope=...] [--type=...]  List memories
+  conductor memory show <slug>                Show one memory
+  conductor memory add --name=X ...          Add a memory
+  conductor memory rm <slug>                 Remove a memory
+  conductor memory search <query>            Search memories
+  conductor agent list                       List available agent plugins
+  conductor agent info <id>                  Show plugin details
+  conductor agent use <id>                   Set default agent plugin
+  conductor obsidian status                  Check Obsidian vault sync status
   conductor mcp                               Start MCP server (stdio)
   conductor doctor                            Health check config, tracks, and environment
   conductor help                              Show this help
@@ -123,6 +135,16 @@ async function main(): Promise<void> {
 		case "webhook":
 			exitCode = await cmdWebhook(args);
 			break;
+		case "memory":
+		case "mem":
+			exitCode = await cmdMemory(args);
+			break;
+		case "agent":
+			exitCode = await cmdAgent(args);
+			break;
+		case "obsidian":
+			exitCode = await cmdObsidian(args);
+			break;
 		case "doctor":
 			exitCode = await cmdDoctor(args);
 			break;
@@ -136,6 +158,15 @@ async function main(): Promise<void> {
 			const mcpCwd = positionalArgs(args)[0] ?? process.cwd();
 			startMcpServer(mcpCwd);
 			return;
+		}
+		case "--version":
+		case "-v":
+		case "version": {
+			const { createRequire } = await import("node:module");
+			const require = createRequire(import.meta.url);
+			const { version } = require("../package.json") as { version: string };
+			console.log(version);
+			break;
 		}
 		case "help":
 		case "--help":

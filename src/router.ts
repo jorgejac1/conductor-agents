@@ -33,6 +33,9 @@ export class Router {
 	post(path: string, handler: Handler): this {
 		return this.on("POST", path, handler);
 	}
+	delete(path: string, handler: Handler): this {
+		return this.on("DELETE", path, handler);
+	}
 
 	async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
 		const method = (req.method ?? "GET").toUpperCase();

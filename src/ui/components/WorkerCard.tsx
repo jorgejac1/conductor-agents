@@ -117,8 +117,21 @@ export function WorkerCard({ trackId, worker, evalResult }: WorkerCardProps) {
 	const dur = duration(worker);
 	const canRetry = worker.status === "failed";
 
+	const cardStatus =
+		worker.status === "done"
+			? (evalResult?.passed ?? worker.verifierPassed) === true
+				? "done-pass"
+				: "done-fail"
+			: worker.status === "failed"
+				? "failed"
+				: worker.status === "verifying"
+					? "verifying"
+					: worker.status === "running"
+						? "running"
+						: worker.status;
+
 	return (
-		<div className="card worker-card">
+		<div className="card worker-card" data-status={cardStatus}>
 			<div className="worker-card-header">
 				<div className="worker-card-left">
 					<div className={statusDotClass(worker, evalResult)} />

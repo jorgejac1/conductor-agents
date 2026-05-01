@@ -159,6 +159,14 @@ export async function generatePlan(goal: string, cwd: string, agentCmd: string):
 		throw new Error("conductor not initialized. Run conductor init first.");
 	}
 
+	// Claude CLI requires ANTHROPIC_API_KEY. Fail fast instead of waiting for a network timeout.
+	const baseCmd = agentCmd.split("/").at(-1) ?? agentCmd;
+	if (baseCmd === "claude" && !process.env.ANTHROPIC_API_KEY) {
+		throw new Error(
+			"ANTHROPIC_API_KEY is not set. Export your API key before running conductor plan.",
+		);
+	}
+
 	const contextSnapshot = buildContextSnapshot(cwd);
 	const isoTimestamp = new Date().toISOString();
 
@@ -444,34 +452,127 @@ export function diffPlan(cwd: string, draft: PlanDraft): PlanDiff {
  * no failures exist to iterate on.
  */
 export async function generatePlanIterate(cwd: string, agentCmd?: string): Promise<boolean> {
-	const { loadConfig, trackTodoPath } = await import("./config.js");
+	const { trackTodoPath } = await import("./config.js");
 	const { queryRuns, loadState } = await import("evalgate");
 
 	const config = loadConfig(cwd);
 	if (!config) throw new Error("No conductor config found.");
 
-	const failureLines: string[] = [];
+	interface FailureContext {
+		trackId: string;
+		workerId: string;
+		taskTitle: string;
+		failureKind: string;
+		evalStdout: string;
+		evalStderr: string;
+		agentExitCode: number;
+	}
+
+	const failures: FailureContext[] = [];
 
 	for (const track of config.tracks) {
 		const todoPath = trackTodoPath(track.id, cwd);
 		const state = await loadState(todoPath);
 		if (!state) continue;
 
-		const failedWorkers = state.workers.filter((w) => w.status === "failed");
-		for (const w of failedWorkers) {
+		// Include both failed workers AND done workers where verifier didn't pass
+		const relevantWorkers = state.workers.filter(
+			(w) => w.status === "failed" || (w.status === "done" && w.verifierPassed === false),
+		);
+
+		for (const w of relevantWorkers) {
 			const record = queryRuns(todoPath, { contractId: w.contractId, passed: false, limit: 1 })[0];
-			const reason = w.failureKind ?? "unknown";
-			const detail = record ? ` — eval output: "${record.stdout.slice(0, 120)}"` : "";
-			failureLines.push(`  ${track.id}/${w.id.slice(0, 8)}: ${reason}${detail}`);
+			failures.push({
+				trackId: track.id,
+				workerId: w.id,
+				taskTitle: w.contractId,
+				failureKind: w.failureKind ?? "unknown",
+				evalStdout: record?.stdout ?? "",
+				evalStderr: record?.stderr ?? "",
+				agentExitCode: record?.exitCode ?? -1,
+			});
 		}
 	}
 
-	if (failureLines.length === 0) return false;
+	if (failures.length === 0) return false;
 
-	const goal = `Review these worker failures and revise the task breakdown to fix them:\n${failureLines.join("\n")}`;
+	// Build structured failure section — full stdout, no truncation
+	const sections = failures.map((f) => {
+		const lines = [
+			`### ${f.trackId} / ${f.workerId.slice(0, 8)}`,
+			`task: ${f.taskTitle}`,
+			`failure-kind: ${f.failureKind}`,
+			`exit-code: ${f.agentExitCode}`,
+		];
+		if (f.evalStdout) lines.push(`eval-stdout:\n${f.evalStdout}`);
+		if (f.evalStderr) lines.push(`eval-stderr:\n${f.evalStderr}`);
+		return lines.join("\n");
+	});
+
+	const goal = `Review these worker failures and revise the task breakdown to fix them:\n\n${sections.join("\n\n")}`;
 	const cmd = agentCmd ?? config.defaults.agentCmd ?? "claude";
 	await generatePlan(goal, cwd, cmd);
 	return true;
+}
+
+/**
+ * Auto-loop: generate plan → apply → run → collect failures → repeat.
+ * Stops early when no failures remain (converged) or maxRounds is reached.
+ */
+export async function runIterationLoop(
+	cwd: string,
+	opts: { maxRounds?: number; agentCmd?: string } = {},
+): Promise<{ rounds: number; converged: boolean }> {
+	const { trackTodoPath } = await import("./config.js");
+	const { loadState } = await import("evalgate");
+	const { runTrack } = await import("./orchestrator.js");
+
+	const maxRounds = opts.maxRounds ?? 3;
+	let round = 0;
+
+	for (round = 1; round <= maxRounds; round++) {
+		console.log(`\n[plan iterate] Round ${round}/${maxRounds}`);
+
+		const hasFailures = await generatePlanIterate(cwd, opts.agentCmd);
+		if (!hasFailures) {
+			console.log("[plan iterate] No failures found — converged.");
+			return { rounds: round - 1, converged: true };
+		}
+
+		await applyPlan(cwd, false);
+
+		const config = loadConfig(cwd);
+		if (!config) throw new Error("No conductor config found after applyPlan.");
+
+		for (const track of config.tracks) {
+			console.log(`[plan iterate] Running track "${track.id}"…`);
+			await runTrack(track.id, { cwd });
+		}
+
+		// Check if all workers passed
+		const { queryRuns } = await import("evalgate");
+		let anyFailures = false;
+		for (const track of config.tracks) {
+			const todoPath = trackTodoPath(track.id, cwd);
+			const state = await loadState(todoPath);
+			if (!state) continue;
+			const failed = state.workers.filter(
+				(w) => w.status === "failed" || (w.status === "done" && w.verifierPassed === false),
+			);
+			if (failed.length > 0) {
+				anyFailures = true;
+				break;
+			}
+		}
+		void queryRuns;
+
+		if (!anyFailures) {
+			console.log("[plan iterate] All workers passed — converged.");
+			return { rounds: round, converged: true };
+		}
+	}
+
+	return { rounds: round - 1, converged: false };
 }
 
 // ── Apply Plan ────────────────────────────────────────────────────────────────

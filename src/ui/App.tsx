@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ActivityTab } from "./components/ActivityTab.js";
-import { HistoryTab } from "./components/HistoryTab.js";
+import { MemoryTab } from "./components/MemoryTab.js";
 import { NavBar } from "./components/NavBar.js";
 import { SettingsTab } from "./components/SettingsTab.js";
 import { StatusBar } from "./components/StatusBar.js";
@@ -14,8 +14,8 @@ import type { TabId } from "./types.js";
 const TAB_KEYS: Record<string, TabId> = {
 	"1": "tracks",
 	"2": "workers",
-	"3": "history",
-	"4": "activity",
+	"3": "activity",
+	"4": "memory",
 	"5": "settings",
 };
 
@@ -71,8 +71,8 @@ export function App() {
 				<main className="tab-content">
 					{activeTab === "tracks" && <TracksTab />}
 					{activeTab === "workers" && <WorkersTab />}
-					{activeTab === "history" && <HistoryTab />}
 					{activeTab === "activity" && <ActivityTab />}
+					{activeTab === "memory" && <MemoryTab />}
 					{activeTab === "settings" && <SettingsTab />}
 				</main>
 			</div>

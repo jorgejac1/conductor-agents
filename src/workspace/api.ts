@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import type { Router } from "../router.js";
+import { listTracks } from "../track.js";
 import { findWorkspaceRoot, scanProjects } from "./discovery.js";
 import type { ProjectEntry } from "./types.js";
 import { watchDir } from "./watcher.js";
@@ -27,8 +28,6 @@ export function registerWorkspaceRoutes(
 	sseClients: Set<ServerResponse>,
 ): () => void {
 	const workspaceRoot = findWorkspaceRoot(cwd);
-	// True only when we found a real parent workspace (not just the cwd itself).
-	const isRealWorkspace = workspaceRoot !== cwd;
 	// Lazily populated on first API request — avoids scanning at server startup.
 	let projects: ProjectEntry[] | null = null;
 
@@ -36,6 +35,12 @@ export function registerWorkspaceRoutes(
 		if (projects === null) projects = scanProjects(workspaceRoot);
 		return projects;
 	}
+
+	// Show workspace sidebar only when there's a real parent workspace with
+	// at least 2 initialized conductor projects. Prevents /tmp and other
+	// system dirs full of test repos from triggering workspace mode.
+	const isRealWorkspace =
+		workspaceRoot !== cwd && getProjects().filter((p) => p.initialized).length >= 2;
 
 	function broadcastWorkspace(): void {
 		const payload = JSON.stringify({
@@ -104,6 +109,22 @@ export function registerWorkspaceRoutes(
 			return;
 		}
 		json(res, project);
+	});
+
+	// GET /api/workspace/projects/:id/tracks — tracks for a specific project
+	router.get("/api/workspace/projects/:id/tracks", (_req, res, params) => {
+		const project = getProjects().find((p) => p.id === (params.id ?? ""));
+		if (!project) {
+			json(res, { error: "project not found" }, 404);
+			return;
+		}
+		if (!project.initialized) {
+			json(res, [], 200);
+			return;
+		}
+		listTracks(project.path)
+			.then((tracks) => json(res, tracks))
+			.catch((err: unknown) => json(res, { error: String(err) }, 500));
 	});
 
 	// POST /api/workspace/projects/:id/init — run conductor init in the project dir

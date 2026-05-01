@@ -24,6 +24,10 @@ interface WorkerLayout {
 	pos: Vec2;
 }
 
+// Track node half-size (must match CSS)
+const TRACK_R = 28;
+const WORKER_R = 7;
+
 function computeLayout(
 	tracks: TrackStatus[],
 	swarmStates: Record<string, { workers: WorkerState[] } | null | undefined>,
@@ -35,7 +39,10 @@ function computeLayout(
 	const n = tracks.length;
 	if (n === 0) return { trackLayouts: [], workerLayouts: [] };
 
-	const trackRingR = Math.min(cx, cy) * (n === 1 ? 0 : 0.38);
+	// Minimum ring radius so adjacent nodes don't overlap:
+	// arc between neighbours = 2π·R / n  ≥  2·TRACK_R + gap
+	const minRingR = n <= 1 ? 0 : (TRACK_R * 2 + 60) / (2 * Math.sin(Math.PI / n));
+	const trackRingR = Math.max(Math.min(cx, cy) * 0.5, minRingR);
 
 	const trackLayouts: TrackLayout[] = tracks.map((ts, i) => {
 		const angle = n === 1 ? -Math.PI / 2 : (i / n) * 2 * Math.PI - Math.PI / 2;
@@ -76,9 +83,46 @@ function computeLayout(
 	return { trackLayouts, workerLayouts };
 }
 
-// Track node half-size (must match CSS)
-const TRACK_R = 28;
-const WORKER_R = 7;
+function computeFitTransform(
+	trackLayouts: TrackLayout[],
+	workerLayouts: WorkerLayout[],
+	w: number,
+	h: number,
+): { x: number; y: number; scale: number } {
+	if (trackLayouts.length === 0) return { x: 0, y: 0, scale: 1 };
+
+	const nodeMargin = TRACK_R + 30; // node radius + label clearance
+	let minX = Infinity;
+	let maxX = -Infinity;
+	let minY = Infinity;
+	let maxY = -Infinity;
+
+	for (const { pos } of trackLayouts) {
+		minX = Math.min(minX, pos.x - nodeMargin);
+		maxX = Math.max(maxX, pos.x + nodeMargin);
+		minY = Math.min(minY, pos.y - nodeMargin);
+		maxY = Math.max(maxY, pos.y + nodeMargin + 20); // +20 for label below node
+	}
+	for (const { pos } of workerLayouts) {
+		minX = Math.min(minX, pos.x - WORKER_R - 6);
+		maxX = Math.max(maxX, pos.x + WORKER_R + 6);
+		minY = Math.min(minY, pos.y - WORKER_R - 6);
+		maxY = Math.max(maxY, pos.y + WORKER_R + 6);
+	}
+
+	const padding = 72;
+	const contentW = maxX - minX;
+	const contentH = maxY - minY;
+	if (contentW <= 0 || contentH <= 0) return { x: 0, y: 0, scale: 1 };
+
+	const scale = Math.min((w - 2 * padding) / contentW, (h - 2 * padding) / contentH, 1.4);
+
+	return {
+		x: w / 2 - ((minX + maxX) / 2) * scale,
+		y: h / 2 - ((minY + maxY) / 2) * scale,
+		scale,
+	};
+}
 
 export function GraphView({ onShowHelp }: { onShowHelp?: () => void }) {
 	const { state, showToast, showError } = useDashboard();
@@ -108,6 +152,22 @@ export function GraphView({ onShowHelp }: { onShowHelp?: () => void }) {
 		ro.observe(el);
 		return () => ro.disconnect();
 	}, []);
+
+	// Fit to bounds when track list or canvas size changes.
+	// Use a ref so we can read latest tracks/swarmStates without them being deps
+	// (we don't want to re-fit every time a worker status updates).
+	const stateRef = useRef({ tracks, swarmStates });
+	stateRef.current = { tracks, swarmStates };
+	const trackIdsKey = tracks.map((t) => t.track.id).join(",");
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally excludes swarmStates
+	useEffect(() => {
+		if (size.w === 0 || size.h === 0) return;
+		const { tracks: t, swarmStates: ss } = stateRef.current;
+		if (t.length === 0) return;
+		const { trackLayouts: tl, workerLayouts: wl } = computeLayout(t, ss, size.w, size.h);
+		setTransform(computeFitTransform(tl, wl, size.w, size.h));
+	}, [trackIdsKey, size.w, size.h]);
 
 	// Zoom via wheel
 	const onWheel = useCallback((e: React.WheelEvent) => {
@@ -248,26 +308,8 @@ export function GraphView({ onShowHelp }: { onShowHelp?: () => void }) {
 					transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
 				}}
 			>
-				{/* SVG edges */}
+				{/* SVG edges — only track dependency edges (dependsOn), not worker→track lines */}
 				<svg className="graph-svg" style={{ width: size.w, height: size.h }} aria-hidden="true">
-					{/* Worker-to-track edges */}
-					{workerLayouts.map(({ worker, trackId, pos }) => {
-						const tl = trackLayouts.find((t) => t.trackStatus.track.id === trackId);
-						if (!tl) return null;
-						const dimmed = isWorkerDimmed(trackId);
-						return (
-							<line
-								key={worker.id}
-								x1={tl.pos.x}
-								y1={tl.pos.y}
-								x2={pos.x}
-								y2={pos.y}
-								className="graph-edge"
-								style={{ opacity: dimmed ? 0.05 : 0.6 }}
-							/>
-						);
-					})}
-					{/* Track dependency edges (dashed) */}
 					{trackLayouts.flatMap(({ trackStatus, pos: targetPos }) => {
 						const deps = trackStatus.track.dependsOn ?? [];
 						return deps.map((depId) => {

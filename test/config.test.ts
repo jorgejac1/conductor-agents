@@ -181,4 +181,119 @@ describe("config", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	// ── v3.2: obsidian + memoryBudgetBytes ───────────────────────────────────
+
+	it("validateConfig accepts valid obsidian config with mode push", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude" },
+			obsidian: { vaultPath: "/tmp/vault", mode: "push" },
+		};
+		assert.doesNotThrow(() => validateConfig(cfg));
+	});
+
+	it("validateConfig accepts obsidian mode pull", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude" },
+			obsidian: { vaultPath: "/tmp/vault", mode: "pull" },
+		};
+		assert.doesNotThrow(() => validateConfig(cfg));
+	});
+
+	it("validateConfig accepts obsidian mode two-way", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude" },
+			obsidian: { vaultPath: "/tmp/vault", mode: "two-way" },
+		};
+		assert.doesNotThrow(() => validateConfig(cfg));
+	});
+
+	it("validateConfig accepts obsidian with optional subfolder", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude" },
+			obsidian: { vaultPath: "/tmp/vault", subfolder: "conductor", mode: "push" },
+		};
+		assert.doesNotThrow(() => validateConfig(cfg));
+	});
+
+	it("validateConfig rejects obsidian with invalid mode", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude" },
+			obsidian: { vaultPath: "/tmp/vault", mode: "invalid-mode" },
+		};
+		assert.throws(() => validateConfig(cfg), /mode.*push.*pull.*two-way/i);
+	});
+
+	it("validateConfig rejects obsidian without vaultPath", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude" },
+			obsidian: { mode: "push" },
+		};
+		assert.throws(() => validateConfig(cfg), /vaultPath/i);
+	});
+
+	it("validateConfig rejects obsidian with non-string vaultPath", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude" },
+			obsidian: { vaultPath: 123, mode: "push" },
+		};
+		assert.throws(() => validateConfig(cfg), /vaultPath/i);
+	});
+
+	it("validateConfig rejects obsidian with non-string subfolder", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude" },
+			obsidian: { vaultPath: "/tmp/v", subfolder: 99, mode: "push" },
+		};
+		assert.throws(() => validateConfig(cfg), /subfolder/i);
+	});
+
+	it("validateConfig rejects obsidian that is not an object", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude" },
+			obsidian: "not-an-object",
+		};
+		assert.throws(() => validateConfig(cfg), /obsidian/i);
+	});
+
+	it("validateConfig accepts defaults.memoryBudgetBytes as a number", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude", memoryBudgetBytes: 4096 },
+		};
+		assert.doesNotThrow(() => validateConfig(cfg));
+	});
+
+	it("validateConfig rejects defaults.memoryBudgetBytes when not a number", () => {
+		const cfg = {
+			tracks: [],
+			defaults: { concurrency: 1, agentCmd: "claude", memoryBudgetBytes: "4096" },
+		};
+		assert.throws(() => validateConfig(cfg), /memoryBudgetBytes/i);
+	});
+
+	it("round-trips obsidian config through save + load", () => {
+		const dir = mkdtempSync(join(tmpdir(), "conductor-test-"));
+		try {
+			const config = {
+				tracks: [],
+				defaults: { concurrency: 1, agentCmd: "claude" },
+				obsidian: { vaultPath: "/Users/me/vault", subfolder: "work", mode: "two-way" as const },
+			};
+			saveConfig(config, dir);
+			const loaded = loadConfig(dir);
+			assert.deepStrictEqual(loaded?.obsidian, config.obsidian);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
